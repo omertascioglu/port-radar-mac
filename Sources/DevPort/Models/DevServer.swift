@@ -31,6 +31,44 @@ struct DevServer: Identifiable, Sendable {
         return systemPrefixes.contains { executablePath.hasPrefix($0) }
     }
 
+    /// Parent is gone or reparented to launchd — likely a forgotten terminal session.
+    var isOrphaned: Bool {
+        guard !isSystemProcess else { return false }
+        guard let parentPID else { return false }
+        if parentPID <= 1 {
+            // Many GUI apps are launchd children; only flag likely leftover servers.
+            return looksLikeDevServer
+        }
+        return !ProcessActions.isAlive(parentPID)
+    }
+
+    private var looksLikeDevServer: Bool {
+        if project != nil { return true }
+        let cmd = (command ?? processName).lowercased()
+        let needles = [
+            "node", "npm", "npx", "pnpm", "yarn", "bun", "vite", "next",
+            "python", "uvicorn", "ruby", "rails", "go run", "cargo",
+            "docker", "supabase", "http.server",
+        ]
+        return needles.contains { cmd.contains($0) }
+    }
+
+    func formattedUptime(relativeTo now: Date = Date()) -> String? {
+        guard let startTime else { return nil }
+        let seconds = max(0, Int(now.timeIntervalSince(startTime)))
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        let remMinutes = minutes % 60
+        if hours < 48 {
+            return remMinutes == 0 ? "\(hours)h" : "\(hours)h \(remMinutes)m"
+        }
+        let days = hours / 24
+        let remHours = hours % 24
+        return remHours == 0 ? "\(days)d" : "\(days)d \(remHours)h"
+    }
+
     init(listener: ListeningPort, details: ProcessDetails?, project: ProjectInfo? = nil) {
         self.port = listener.port
         self.pid = listener.pid

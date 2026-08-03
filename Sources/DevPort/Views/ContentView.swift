@@ -31,10 +31,7 @@ struct ContentView: View {
     @State private var showSettings = false
 
     private var visibleServers: [DevServer] {
-        if preferences.hideSystemProcesses {
-            return state.servers.filter { !$0.isSystemProcess }
-        }
-        return state.servers
+        state.servers.filter { preferences.matchesFilters($0) }
     }
 
     private var groups: [ProjectGroup] {
@@ -489,10 +486,20 @@ struct ServerRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(.green)
+                    .fill(server.isOrphaned ? Color.orange : Color.green)
                     .frame(width: 7, height: 7)
+                    .help(server.isOrphaned ? "Possibly orphaned — parent process is gone" : "Listening")
                 Text(server.processName)
                     .font(.system(.body, weight: .medium))
+                if server.isOrphaned {
+                    Text("Orphan")
+                        .font(.caption2)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(.orange.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.orange)
+                        .help("Parent shell/process is gone — this server may have been forgotten")
+                }
                 if server.isSystemProcess {
                     Text("System")
                         .font(.caption2)
@@ -503,7 +510,15 @@ struct ServerRow: View {
                         .help("Normal macOS system process — safe to leave running; killing it is rarely needed")
                 }
                 Spacer()
-                Text("localhost:\(String(server.port))")
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    if let uptime = server.formattedUptime(relativeTo: context.date) {
+                        Text(uptime)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .help("Process uptime")
+                    }
+                }
+                Text(String(server.port))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                 actionButtons

@@ -2,7 +2,7 @@
 
 Ordered checklist. Work top to bottom, one task at a time; finish **Done when** before moving on. Cross out completed tasks with strikethrough and update **Current focus**.
 
-**Current focus:** Task 8
+**Current focus:** All tasks complete
 
 ---
 
@@ -52,14 +52,14 @@ Group rows by project with framework SF Symbols; add open URL, reveal in Finder,
 
 ## Phase 5 — Polish
 
-**8. Uptime + restart**
-Show process uptime; restart action (kill, relaunch with original command + cwd).
-*Done when:* restarting a Vite server brings it back on the same port.
+~~**8. Uptime + restart**
+Show process uptime. Restart was dropped — relaunching arbitrary commands from a menu-bar app is unreliable.
+*Done when:* each row shows uptime.~~
 
-**9. Notifications + orphan flag**
+~~**9. Notifications + orphan flag**
 Notification when a new dev port appears; flag servers whose parent shell is gone as possibly orphaned.
-*Done when:* starting a new dev server triggers a notification; an orphaned server is visually marked.
+*Done when:* starting a new dev server triggers a notification; an orphaned server is visually marked.~~
 
-**10. Preferences**
+~~**10. Preferences**
 Preferences window: polling interval, port ranges, process allowlist, notifications toggle; persist in `UserDefaults`.
-*Done when:* settings survive an app restart and visibly change behavior.
+*Done when:* settings survive an app restart and visibly change behavior.~~

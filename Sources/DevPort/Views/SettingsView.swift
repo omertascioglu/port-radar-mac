@@ -44,6 +44,43 @@ struct SettingsModal: View {
                             .controlSize(.small)
                     }
                 }
+
+                settingsGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Port range")
+                            .font(.system(size: 13))
+                        HStack(spacing: 8) {
+                            TextField("Min", value: $preferences.portRangeMin, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 72)
+                            Text("–")
+                                .foregroundStyle(.secondary)
+                            TextField("Max", value: $preferences.portRangeMax, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 72)
+                            Spacer()
+                        }
+                        .font(.system(size: 12, design: .monospaced))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+
+                    Divider().padding(.leading, 12)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Process allowlist")
+                            .font(.system(size: 13))
+                        TextField("node, python, vite…", text: $preferences.processAllowlist)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                        Text("Comma-separated. Empty shows all matching the other filters.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                }
             }
             .padding(.horizontal, 16)
 
@@ -59,7 +96,7 @@ struct SettingsModal: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
-        .frame(width: 300)
+        .frame(width: 320)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor))

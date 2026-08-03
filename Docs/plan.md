@@ -60,7 +60,7 @@ Source folders live in the repo root (per rules.md project layout):
 | `Models` | `DevServer`, `Project`, `Framework` value types |
 | `State` | `@Observable` app store; new/gone events, notification dispatch |
 | `Views` | `MenuBarExtra` window, project groups, server rows, preferences |
-| `Actions` | Open URL, reveal in Finder, open in Cursor/Terminal, terminate (SIGTERM), force kill (SIGKILL), restart |
+| `Actions` | Open URL, reveal in Finder, open in Cursor/Terminal, terminate (SIGTERM), force kill (SIGKILL) |
 
 Concurrency via async/await. Defensive error handling around every external call (`lsof` output parsing, dead PIDs mid-scan) — a failed scan must never crash the app, just skip the tick.
 
@@ -72,7 +72,7 @@ Concurrency via async/await. Defensive error handling around every external call
 
 - **Per project** — name, framework icon, path
 - **Per server** — status dot, localhost URL, port, PID, command (truncated, copyable), uptime
-- **Controls** — open URL in browser, reveal in Finder, open in Cursor, open in Terminal, stop (graceful, falls back to force kill), force kill, restart
+- **Controls** — open URL in browser, reveal in Finder, open in Cursor, open in Terminal, stop (graceful, falls back to force kill), force kill
 - **Preferences** — polling interval, port ranges, process allowlist, notifications on/off
 
 Clean, native look; SF Symbols throughout; no emoji as icons.
