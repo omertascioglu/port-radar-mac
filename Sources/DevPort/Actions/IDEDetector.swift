@@ -11,6 +11,7 @@ enum IDEDetector {
     /// Common macOS editors we know how to open a folder in.
     static let catalog: [EditorApp] = [
         EditorApp(name: "Cursor", bundleIdentifier: "com.todesktop.230313mzl4w4u92"),
+        EditorApp(name: "ChatGPT", bundleIdentifier: "com.openai.codex"),
         EditorApp(name: "Visual Studio Code", bundleIdentifier: "com.microsoft.VSCode"),
         EditorApp(name: "VS Code Insiders", bundleIdentifier: "com.microsoft.VSCodeInsiders"),
         EditorApp(name: "Zed", bundleIdentifier: "dev.zed.Zed"),

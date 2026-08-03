@@ -80,7 +80,8 @@ final class Preferences {
         processAllowlist = UserDefaults.standard.string(forKey: Key.allowlist) ?? ""
 
         let savedIDE = UserDefaults.standard.string(forKey: Key.preferredIDE) ?? ""
-        if !savedIDE.isEmpty, IDEDetector.isInstalled(savedIDE) {
+        let knownInstalled = IDEDetector.installed().map(\.bundleIdentifier)
+        if !savedIDE.isEmpty, knownInstalled.contains(savedIDE) {
             preferredIDEBundleID = savedIDE
         } else {
             preferredIDEBundleID = IDEDetector.preferredDefault()?.bundleIdentifier ?? ""
