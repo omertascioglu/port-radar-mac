@@ -24,15 +24,25 @@ enum KillPhase {
 
 struct ContentView: View {
     private var state = AppState.shared
+    private var preferences = Preferences.shared
     @State private var killPrompt: KillPrompt?
     @State private var killPhase: KillPhase = .confirm
+    @State private var showQuitConfirm = false
+    @State private var showSettings = false
+
+    private var visibleServers: [DevServer] {
+        if preferences.hideSystemProcesses {
+            return state.servers.filter { !$0.isSystemProcess }
+        }
+        return state.servers
+    }
 
     private var groups: [ProjectGroup] {
         var projects: [String: [DevServer]] = [:]
         var system: [DevServer] = []
         var other: [DevServer] = []
 
-        for server in state.servers {
+        for server in visibleServers {
             if let project = server.project {
                 projects[project.rootPath, default: []].append(server)
             } else if server.isSystemProcess {
@@ -75,12 +85,16 @@ struct ContentView: View {
         return false
     }
 
+    private var isModalPresented: Bool {
+        killPrompt != nil || showQuitConfirm || showSettings
+    }
+
     var body: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 Divider()
-                if state.servers.isEmpty {
+                if visibleServers.isEmpty {
                     emptyState
                 } else {
                     serverList
@@ -88,12 +102,15 @@ struct ContentView: View {
                 Divider()
                 footer
             }
-            .disabled(killPrompt != nil)
-            .opacity(killPrompt == nil ? 1 : 0.25)
+            .disabled(isModalPresented)
+            .opacity(isModalPresented ? 0.25 : 1)
 
-            if let prompt = killPrompt {
+            if isModalPresented {
                 Color.black.opacity(0.45)
                     .ignoresSafeArea()
+            }
+
+            if let prompt = killPrompt {
                 KillModal(
                     prompt: prompt,
                     phase: killPhase,
@@ -105,10 +122,21 @@ struct ContentView: View {
                     }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if showQuitConfirm {
+                QuitModal(
+                    onConfirm: { NSApplication.shared.terminate(nil) },
+                    onDismiss: { showQuitConfirm = false }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if showSettings {
+                SettingsModal(onDismiss: { showSettings = false })
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .frame(width: 380)
         .animation(.easeOut(duration: 0.15), value: killPrompt?.id)
+        .animation(.easeOut(duration: 0.15), value: showQuitConfirm)
+        .animation(.easeOut(duration: 0.15), value: showSettings)
     }
 
     private func runKill(_ prompt: KillPrompt) async {
@@ -131,7 +159,7 @@ struct ContentView: View {
             Text("DevPort")
                 .font(.headline)
             Spacer()
-            Text("\(state.servers.count) listening")
+            Text("\(visibleServers.count) listening")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -154,7 +182,7 @@ struct ContentView: View {
                     GroupHeader(group: group)
                     ForEach(group.servers) { server in
                         ServerRow(server: server) { force in
-                            guard killPrompt == nil else { return }
+                            guard !isModalPresented else { return }
                             killPhase = .confirm
                             killPrompt = KillPrompt(server: server, force: force)
                         }
@@ -166,22 +194,96 @@ struct ContentView: View {
         // unless given an explicit height, so estimate from the content.
         .frame(height: min(
             420,
-            CGFloat(state.servers.count) * 47 + CGFloat(groups.count) * 27
+            CGFloat(visibleServers.count) * 47 + CGFloat(groups.count) * 27
         ))
     }
 
     private var footer: some View {
-        HStack {
-            Spacer()
-            Button("Quit DevPort") {
-                NSApplication.shared.terminate(nil)
+        VStack(spacing: 0) {
+            Button {
+                guard !isModalPresented else { return }
+                showSettings = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "gearshape")
+                    Text("Settings")
+                    Spacer()
+                }
             }
             .buttonStyle(.plain)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .keyboardShortcut(",", modifiers: .command)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            Divider()
+
+            Button {
+                guard !isModalPresented else { return }
+                showQuitConfirm = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "power")
+                    Text("Quit DevPort")
+                    Spacer()
+                    Text("⌘Q")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("q", modifiers: .command)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+}
+
+struct QuitModal: View {
+    let onConfirm: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Quit DevPort?")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("The menu bar app will close. Listening servers keep running.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: onDismiss) {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(ModalButtonStyle(kind: .cancel))
+                .keyboardShortcut(.cancelAction)
+
+                Button(action: onConfirm) {
+                    Text("Quit")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(ModalButtonStyle(kind: .destructive))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 4)
+        }
+        .padding(18)
+        .frame(width: 300, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: .white.opacity(0.18), radius: 28, y: 0)
+        .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
     }
 }
 
@@ -310,7 +412,7 @@ struct KillModal: View {
     }
 }
 
-private struct ModalButtonStyle: ButtonStyle {
+struct ModalButtonStyle: ButtonStyle {
     enum Kind { case cancel, destructive }
 
     let kind: Kind

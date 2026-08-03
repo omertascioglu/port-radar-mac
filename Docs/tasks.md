@@ -2,7 +2,7 @@
 
 Ordered checklist. Work top to bottom, one task at a time; finish **Done when** before moving on. Cross out completed tasks with strikethrough and update **Current focus**.
 
-**Current focus:** Task 7
+**Current focus:** Task 8
 
 ---
 
@@ -44,9 +44,9 @@ Per-row stop button: SIGTERM, then SIGKILL after a timeout if still alive; separ
 Walk up from cwd to `.git` root; read `package.json` / `pyproject.toml` / `go.mod` for project name and framework. System processes stay visible but labeled with the System badge (user decision — no hiding).
 *Done when:* servers are labeled with the correct project name and framework.~~
 
-**7. Grouped UI + open actions**
+~~**7. Grouped UI + open actions**
 Group rows by project with framework SF Symbols; add open URL, reveal in Finder, open in Cursor, open in Terminal.
-*Done when:* each action works from a server row.
+*Done when:* each action works from a server row.~~
 
 ---
 

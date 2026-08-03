@@ -8,10 +8,13 @@ final class AppState {
 
     private(set) var servers: [DevServer] = []
     private var started = false
+    /// First scan dumps everything already running — don't notify for that batch.
+    private var readyForNotifications = false
 
     func start() {
         guard !started else { return }
         started = true
+        PortNotifier.requestPermissionIfNeeded()
         Task {
             let events = await ScannerLoop.shared.events()
             await ScannerLoop.shared.start()
@@ -35,8 +38,16 @@ final class AppState {
             if let project {
                 scannerLog.info("port \(listener.port) → project \(project.name, privacy: .public) (\(project.framework.rawValue, privacy: .public))")
             }
-            updated.append(DevServer(listener: listener, details: details, project: project))
+            let server = DevServer(listener: listener, details: details, project: project)
+            updated.append(server)
+
+            if readyForNotifications,
+               Preferences.shared.notificationsEnabled,
+               !server.isSystemProcess {
+                PortNotifier.notifyNewPort(port: server.port, processName: server.processName)
+            }
         }
         servers = updated.sorted { $0.port < $1.port }
+        readyForNotifications = true
     }
 }

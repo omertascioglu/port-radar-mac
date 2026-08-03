@@ -19,16 +19,16 @@ actor ScannerLoop {
         AsyncStream { self.continuation = $0 }
     }
 
-    func start(interval: Duration = .seconds(2.5)) {
+    func start(interval: Duration? = nil) {
         guard !running else { return }
         running = true
-        Task { await loop(interval: interval) }
+        Task { await loop() }
     }
 
-    private func loop(interval: Duration) async {
+    private func loop() async {
         while true {
             tick()
-            try? await Task.sleep(for: interval)
+            try? await Task.sleep(for: Preferences.currentPollingInterval())
         }
     }
 
