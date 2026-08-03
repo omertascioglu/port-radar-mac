@@ -15,6 +15,16 @@ make clean    # remove .build/ and DevPort.app
 
 The Makefile wraps the compiled binary into a proper `.app` bundle because two things require one: user notifications (need a bundle identifier) and `LSUIElement` (menu-bar only, no Dock icon).
 
+## Quick test
+
+With DevPort running, start a throwaway listener in another terminal:
+
+```bash
+python3 -m http.server 8128
+```
+
+It should appear in the menu bar within a few seconds as a Python row on `localhost:8128`. Use Stop there to exercise kill, or `Ctrl+C` in the terminal. DevPort itself does not listen on a port, so it will not show up in its own list.
+
 ## How it works
 
 - **Scan** — polls `lsof -iTCP -sTCP:LISTEN -P -n` every ~2.5 s and diffs snapshots of `(port, pid)`.

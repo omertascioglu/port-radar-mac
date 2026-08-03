@@ -2,7 +2,7 @@
 
 Ordered checklist. Work top to bottom, one task at a time; finish **Done when** before moving on. Cross out completed tasks with strikethrough and update **Current focus**.
 
-**Current focus:** Task 7 (Task 5 pending user kill-test from the UI)
+**Current focus:** Task 7
 
 ---
 
@@ -32,9 +32,9 @@ PID → executable path, full launch command, parent PID, working directory. Han
 
 ## Phase 3 — Kill controls (MVP part 2)
 
-**5. Stop / force kill**
+~~**5. Stop / force kill**
 Per-row stop button: SIGTERM, then SIGKILL after a timeout if still alive; separate force-kill option; confirmation before killing.
-*Done when:* a dev server started in a terminal can be stopped from the menu bar and the row disappears. **This completes the MVP.**
+*Done when:* a dev server started in a terminal can be stopped from the menu bar and the row disappears. **This completes the MVP.**~~
 
 ---
 

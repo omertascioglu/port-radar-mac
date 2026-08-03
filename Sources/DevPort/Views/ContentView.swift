@@ -9,8 +9,23 @@ struct ProjectGroup: Identifiable {
     let servers: [DevServer]
 }
 
+/// In-window kill confirmation — system `.alert` dismisses MenuBarExtra panels.
+struct KillPrompt: Identifiable {
+    let server: DevServer
+    let force: Bool
+    var id: String { "\(server.id)-\(force)" }
+}
+
+enum KillPhase {
+    case confirm
+    case working
+    case result(KillOutcome)
+}
+
 struct ContentView: View {
     private var state = AppState.shared
+    @State private var killPrompt: KillPrompt?
+    @State private var killPhase: KillPhase = .confirm
 
     private var groups: [ProjectGroup] {
         var projects: [String: [DevServer]] = [:]
@@ -55,19 +70,60 @@ struct ContentView: View {
         return result
     }
 
+    private var isBusy: Bool {
+        if case .working = killPhase { return true }
+        return false
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            if state.servers.isEmpty {
-                emptyState
-            } else {
-                serverList
+        ZStack {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider()
+                if state.servers.isEmpty {
+                    emptyState
+                } else {
+                    serverList
+                }
+                Divider()
+                footer
             }
-            Divider()
-            footer
+            .disabled(killPrompt != nil)
+            .opacity(killPrompt == nil ? 1 : 0.25)
+
+            if let prompt = killPrompt {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                KillModal(
+                    prompt: prompt,
+                    phase: killPhase,
+                    onConfirm: { await runKill(prompt) },
+                    onDismiss: {
+                        guard !isBusy else { return }
+                        killPrompt = nil
+                        killPhase = .confirm
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
         .frame(width: 380)
+        .animation(.easeOut(duration: 0.15), value: killPrompt?.id)
+    }
+
+    private func runKill(_ prompt: KillPrompt) async {
+        killPhase = .working
+        let outcome: KillOutcome
+        if prompt.force {
+            outcome = await ProcessActions.forceKill(pid: prompt.server.pid)
+        } else {
+            outcome = await ProcessActions.stop(pid: prompt.server.pid)
+        }
+        killPhase = .result(outcome)
+        // Brief pause so the user can read the result before the modal closes.
+        try? await Task.sleep(for: .milliseconds(1100))
+        killPrompt = nil
+        killPhase = .confirm
     }
 
     private var header: some View {
@@ -97,7 +153,11 @@ struct ContentView: View {
                 ForEach(groups) { group in
                     GroupHeader(group: group)
                     ForEach(group.servers) { server in
-                        ServerRow(server: server)
+                        ServerRow(server: server) { force in
+                            guard killPrompt == nil else { return }
+                            killPhase = .confirm
+                            killPrompt = KillPrompt(server: server, force: force)
+                        }
                     }
                 }
             }
@@ -122,6 +182,169 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+struct KillModal: View {
+    let prompt: KillPrompt
+    let phase: KillPhase
+    let onConfirm: () async -> Void
+    let onDismiss: () -> Void
+
+    private var title: String {
+        let action = prompt.force ? "Force kill" : "Stop"
+        return "\(action) \(prompt.server.processName)?"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("localhost:\(String(prompt.server.port)) · pid \(String(prompt.server.pid))")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            switch phase {
+            case .confirm:
+                confirmBody
+            case .working:
+                workingBody
+            case .result(let outcome):
+                resultBody(outcome)
+            }
+        }
+        .padding(18)
+        .frame(width: 300, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: .white.opacity(0.18), radius: 28, y: 0)
+        .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
+    }
+
+    @ViewBuilder
+    private var confirmBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if prompt.server.isSystemProcess {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("System process — macOS may relaunch it automatically.")
+                        .foregroundStyle(.orange)
+                }
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text(
+                prompt.force
+                    ? "Kills immediately with SIGKILL. The process has no chance to clean up."
+                    : "Asks the process to quit (SIGTERM). Force kills after a few seconds if it doesn't exit."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        HStack(spacing: 8) {
+            Button(action: onDismiss) {
+                Text("Cancel")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(ModalButtonStyle(kind: .cancel))
+            .keyboardShortcut(.cancelAction)
+
+            Button {
+                Task { await onConfirm() }
+            } label: {
+                Text(prompt.force ? "Force Kill" : "Stop")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(ModalButtonStyle(kind: .destructive))
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.top, 4)
+    }
+
+    private var workingBody: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(prompt.force ? "Force killing…" : "Stopping…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func resultBody(_ outcome: KillOutcome) -> some View {
+        HStack(spacing: 8) {
+            switch outcome {
+            case .stopped:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+                Text("Stopped")
+                    .font(.callout.weight(.medium))
+            case .failed(let message):
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+private struct ModalButtonStyle: ButtonStyle {
+    enum Kind { case cancel, destructive }
+
+    let kind: Kind
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                fillColor.opacity(configuration.isPressed ? 0.55 : 0.72),
+                                fillColor.opacity(configuration.isPressed ? 0.42 : 0.58),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.white.opacity(0.22), lineWidth: 0.5)
+            )
+            .shadow(color: fillColor.opacity(0.35), radius: 8, y: 2)
+    }
+
+    private var fillColor: Color {
+        switch kind {
+        case .cancel: Color(red: 0.22, green: 0.72, blue: 0.38)
+        case .destructive: Color(red: 0.92, green: 0.28, blue: 0.28)
+        }
     }
 }
 
@@ -158,8 +381,7 @@ struct GroupHeader: View {
 
 struct ServerRow: View {
     let server: DevServer
-    /// When non-nil, the row shows inline kill confirmation (true = force kill).
-    @State private var confirmingForce: Bool?
+    let onKill: (_ force: Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -184,59 +406,21 @@ struct ServerRow: View {
                     .foregroundStyle(.secondary)
                 actionButtons
             }
-            if let force = confirmingForce {
-                confirmationBar(force: force)
-            } else {
-                HStack(spacing: 6) {
-                    Text("pid \(String(server.pid))")
+            HStack(spacing: 6) {
+                Text("pid \(String(server.pid))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                if let command = server.command {
+                    Text(command)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                    if let command = server.command {
-                        Text(command)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-    }
-
-    private func confirmationBar(force: Bool) -> some View {
-        HStack(spacing: 6) {
-            if server.isSystemProcess {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                Text("System process — macOS may relaunch it.")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            } else {
-                Text(force ? "Force kill immediately?" : "Stop this process?")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(force ? "Force Kill" : "Stop") {
-                let pid = server.pid
-                if force {
-                    ProcessActions.forceKill(pid: pid)
-                } else {
-                    Task { await ProcessActions.stop(pid: pid) }
-                }
-                confirmingForce = nil
-            }
-            .controlSize(.small)
-            .tint(.red)
-            Button("Cancel") {
-                confirmingForce = nil
-            }
-            .controlSize(.small)
-        }
-        .padding(.top, 2)
     }
 
     private var actionButtons: some View {
@@ -268,7 +452,7 @@ struct ServerRow: View {
             .help("More actions")
 
             Button {
-                confirmingForce = false
+                onKill(false)
             } label: {
                 Image(systemName: "stop.circle")
             }
@@ -277,7 +461,7 @@ struct ServerRow: View {
             .help("Stop gracefully — asks the process to quit (SIGTERM), force kills after 4 s if it doesn't")
 
             Button {
-                confirmingForce = true
+                onKill(true)
             } label: {
                 Image(systemName: "bolt.circle")
             }
