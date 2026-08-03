@@ -479,6 +479,8 @@ struct ServerRow: View {
     let server: DevServer
     let onKill: (_ force: Bool) -> Void
 
+    private var editorName: String { Preferences.shared.preferredIDEName }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -551,7 +553,9 @@ struct ServerRow: View {
             Menu {
                 if let path = server.project?.rootPath ?? server.workingDirectory {
                     Button("Reveal in Finder") { OpenActions.revealInFinder(path) }
-                    Button("Open in Cursor") { OpenActions.openInCursor(path) }
+                    Button("Open in \(editorName)") {
+                        OpenActions.openInEditor(path)
+                    }
                     Button("Open in Terminal") { OpenActions.openInTerminal(path) }
                 }
             } label: {

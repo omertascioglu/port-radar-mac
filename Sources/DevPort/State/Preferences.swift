@@ -14,6 +14,7 @@ final class Preferences {
         static let portMin = "portRangeMin"
         static let portMax = "portRangeMax"
         static let allowlist = "processAllowlist"
+        static let preferredIDE = "preferredIDEBundleID"
     }
 
     /// Default matches the scanner's original interval.
@@ -44,6 +45,15 @@ final class Preferences {
         didSet { UserDefaults.standard.set(processAllowlist, forKey: Key.allowlist) }
     }
 
+    /// Bundle ID of the preferred editor (Cursor, VS Code, Zed, …).
+    var preferredIDEBundleID: String {
+        didSet { UserDefaults.standard.set(preferredIDEBundleID, forKey: Key.preferredIDE) }
+    }
+
+    var preferredIDEName: String {
+        IDEDetector.displayName(for: preferredIDEBundleID) ?? "Editor"
+    }
+
     var allowlistTokens: [String] {
         processAllowlist
             .split(whereSeparator: { $0 == "," || $0.isWhitespace })
@@ -68,6 +78,13 @@ final class Preferences {
         portRangeMin = minStored > 0 ? minStored : 1
         portRangeMax = maxStored > 0 ? maxStored : 65535
         processAllowlist = UserDefaults.standard.string(forKey: Key.allowlist) ?? ""
+
+        let savedIDE = UserDefaults.standard.string(forKey: Key.preferredIDE) ?? ""
+        if !savedIDE.isEmpty, IDEDetector.isInstalled(savedIDE) {
+            preferredIDEBundleID = savedIDE
+        } else {
+            preferredIDEBundleID = IDEDetector.preferredDefault()?.bundleIdentifier ?? ""
+        }
     }
 
     func matchesFilters(_ server: DevServer) -> Bool {

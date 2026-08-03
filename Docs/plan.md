@@ -72,7 +72,7 @@ Concurrency via async/await. Defensive error handling around every external call
 
 - **Per project** — name, framework icon, path
 - **Per server** — status dot, localhost URL, port, PID, command (truncated, copyable), uptime
-- **Controls** — open URL in browser, reveal in Finder, open in Cursor, open in Terminal, stop (graceful, falls back to force kill), force kill
+- **Controls** — open URL in browser, reveal in Finder, open in preferred editor, open in Terminal, stop (graceful, falls back to force kill), force kill
 - **Preferences** — polling interval, port ranges, process allowlist, notifications on/off
 
 Clean, native look; SF Symbols throughout; no emoji as icons.

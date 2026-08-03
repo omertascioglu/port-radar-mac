@@ -46,6 +46,26 @@ struct SettingsModal: View {
                 }
 
                 settingsGroup {
+                    settingsRow("Preferred editor") {
+                        let editors = IDEDetector.installed()
+                        if editors.isEmpty {
+                            Text("None found")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("", selection: $preferences.preferredIDEBundleID) {
+                                ForEach(editors) { editor in
+                                    Text(editor.name).tag(editor.bundleIdentifier)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .fixedSize()
+                        }
+                    }
+                }
+
+                settingsGroup {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Port range")
                             .font(.system(size: 13))

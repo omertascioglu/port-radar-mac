@@ -12,21 +12,32 @@ enum OpenActions {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
-    static func openInCursor(_ path: String) {
-        let cursorBundleID = "com.todesktop.230313mzl4w4u92"
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) {
+    static func openInEditor(_ path: String) {
+        let bundleID = Preferences.shared.preferredIDEBundleID
+        let folder = URL(fileURLWithPath: path)
+
+        if !bundleID.isEmpty,
+           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             NSWorkspace.shared.open(
-                [URL(fileURLWithPath: path)],
+                [folder],
                 withApplicationAt: appURL,
                 configuration: NSWorkspace.OpenConfiguration()
             )
-        } else {
-            // Fall back to the `open -a` lookup by name.
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-a", "Cursor", path]
-            try? process.run()
+            return
         }
+
+        // Fall back to macOS default app for folders / first detected editor.
+        if let fallback = IDEDetector.preferredDefault(),
+           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: fallback.bundleIdentifier) {
+            NSWorkspace.shared.open(
+                [folder],
+                withApplicationAt: appURL,
+                configuration: NSWorkspace.OpenConfiguration()
+            )
+            return
+        }
+
+        NSWorkspace.shared.open(folder)
     }
 
     static func openInTerminal(_ path: String) {
