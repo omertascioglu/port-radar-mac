@@ -20,6 +20,16 @@ struct DevServer: Identifiable, Sendable {
         return URL(fileURLWithPath: executablePath).lastPathComponent
     }
 
+    /// True when the executable lives in a macOS system location
+    /// (e.g. rapportd, ControlCenter) rather than a user/dev install.
+    var isSystemProcess: Bool {
+        guard let executablePath else { return false }
+        let systemPrefixes = [
+            "/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/",
+        ]
+        return systemPrefixes.contains { executablePath.hasPrefix($0) }
+    }
+
     init(listener: ListeningPort, details: ProcessDetails?) {
         self.port = listener.port
         self.pid = listener.pid

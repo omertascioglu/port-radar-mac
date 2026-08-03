@@ -42,10 +42,19 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { request in
-            if !request.force {
-                Text("Sends SIGTERM, escalating to SIGKILL if the process doesn't exit within a few seconds.")
-            }
+            Text(alertMessage(for: request))
         }
+    }
+
+    private func alertMessage(for request: KillRequest) -> String {
+        var parts: [String] = []
+        if request.server.isSystemProcess {
+            parts.append("This is a normal macOS system process. Killing it is rarely needed — the system may relaunch it automatically.")
+        }
+        if !request.force {
+            parts.append("Sends SIGTERM, escalating to SIGKILL if the process doesn't exit within a few seconds.")
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     private var header: some View {
@@ -114,6 +123,15 @@ struct ServerRow: View {
                     .frame(width: 7, height: 7)
                 Text(server.processName)
                     .font(.system(.body, weight: .medium))
+                if server.isSystemProcess {
+                    Text("System")
+                        .font(.caption2)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(.orange.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.orange)
+                        .help("Normal macOS system process — safe to leave running; killing it is rarely needed")
+                }
                 Spacer()
                 Text("localhost:\(String(server.port))")
                     .font(.system(.caption, design: .monospaced))
@@ -125,7 +143,7 @@ struct ServerRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Stop (SIGTERM, then SIGKILL if needed)")
+                .help("Stop gracefully — asks the process to quit (SIGTERM), force kills after 4 s if it doesn't")
                 Button {
                     onKill(true)
                 } label: {
@@ -133,7 +151,7 @@ struct ServerRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Force kill (SIGKILL)")
+                .help("Force kill immediately (SIGKILL) — no chance to clean up")
             }
             HStack(spacing: 6) {
                 Text("pid \(String(server.pid))")
