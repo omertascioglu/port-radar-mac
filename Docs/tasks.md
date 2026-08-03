@@ -2,7 +2,7 @@
 
 Ordered checklist. Work top to bottom, one task at a time; finish **Done when** before moving on. Cross out completed tasks with strikethrough and update **Current focus**.
 
-**Current focus:** Task 5
+**Current focus:** Task 7 (Task 5 pending user kill-test from the UI)
 
 ---
 
@@ -40,9 +40,9 @@ Per-row stop button: SIGTERM, then SIGKILL after a timeout if still alive; separ
 
 ## Phase 4 — Project grouping
 
-**6. Project detector**
-Walk up from cwd to `.git` root; read `package.json` / `pyproject.toml` / `go.mod` for project name and framework; system-service filtering (root-owned, known macOS ports).
-*Done when:* servers are labeled with the correct project name and framework, and macOS system listeners don't appear.
+~~**6. Project detector**
+Walk up from cwd to `.git` root; read `package.json` / `pyproject.toml` / `go.mod` for project name and framework. System processes stay visible but labeled with the System badge (user decision — no hiding).
+*Done when:* servers are labeled with the correct project name and framework.~~
 
 **7. Grouped UI + open actions**
 Group rows by project with framework SF Symbols; add open URL, reveal in Finder, open in Cursor, open in Terminal, copy command.

@@ -28,7 +28,14 @@ final class AppState {
         for listener in diff.added {
             // Resolution can fail if the process died mid-scan; keep the bare port.
             let details = ProcessResolver.resolve(pid: listener.pid)
-            updated.append(DevServer(listener: listener, details: details))
+            let project = ProjectDetector.detect(
+                workingDirectory: details?.workingDirectory,
+                command: details?.command
+            )
+            if let project {
+                scannerLog.info("port \(listener.port) → project \(project.name, privacy: .public) (\(project.framework.rawValue, privacy: .public))")
+            }
+            updated.append(DevServer(listener: listener, details: details, project: project))
         }
         servers = updated.sorted { $0.port < $1.port }
     }

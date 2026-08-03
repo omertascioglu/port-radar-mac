@@ -9,6 +9,7 @@ struct DevServer: Identifiable, Sendable {
     let executablePath: String?
     let workingDirectory: String?
     let startTime: Date?
+    let project: ProjectInfo?
 
     var id: String { "\(pid):\(port)" }
 
@@ -30,7 +31,7 @@ struct DevServer: Identifiable, Sendable {
         return systemPrefixes.contains { executablePath.hasPrefix($0) }
     }
 
-    init(listener: ListeningPort, details: ProcessDetails?) {
+    init(listener: ListeningPort, details: ProcessDetails?, project: ProjectInfo? = nil) {
         self.port = listener.port
         self.pid = listener.pid
         self.parentPID = details?.parentPID
@@ -38,5 +39,6 @@ struct DevServer: Identifiable, Sendable {
         self.executablePath = details?.executablePath
         self.workingDirectory = details?.workingDirectory
         self.startTime = details?.startTime
+        self.project = project
     }
 }
