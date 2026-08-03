@@ -35,10 +35,4 @@ enum OpenActions {
         process.arguments = ["-a", "Terminal", path]
         try? process.run()
     }
-
-    static func copyCommand(_ server: DevServer) {
-        guard let command = server.command else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-    }
 }

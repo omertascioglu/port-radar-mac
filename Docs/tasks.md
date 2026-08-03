@@ -45,7 +45,7 @@ Walk up from cwd to `.git` root; read `package.json` / `pyproject.toml` / `go.mo
 *Done when:* servers are labeled with the correct project name and framework.~~
 
 **7. Grouped UI + open actions**
-Group rows by project with framework SF Symbols; add open URL, reveal in Finder, open in Cursor, open in Terminal, copy command.
+Group rows by project with framework SF Symbols; add open URL, reveal in Finder, open in Cursor, open in Terminal.
 *Done when:* each action works from a server row.
 
 ---

@@ -435,8 +435,6 @@ struct ServerRow: View {
             .help("Open localhost:\(String(server.port)) in browser")
 
             Menu {
-                Button("Copy Command") { OpenActions.copyCommand(server) }
-                    .disabled(server.command == nil)
                 if let path = server.project?.rootPath ?? server.workingDirectory {
                     Button("Reveal in Finder") { OpenActions.revealInFinder(path) }
                     Button("Open in Cursor") { OpenActions.openInCursor(path) }
@@ -450,6 +448,7 @@ struct ServerRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("More actions")
+            .disabled(server.project?.rootPath == nil && server.workingDirectory == nil)
 
             Button {
                 onKill(false)
