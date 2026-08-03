@@ -453,10 +453,7 @@ struct GroupHeader: View {
     var body: some View {
         HStack(spacing: 5) {
             if let framework = group.framework {
-                Image(systemName: framework.symbolName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help(framework.rawValue)
+                FrameworkIcon(framework: framework, size: 14)
             }
             Text(group.name)
                 .font(.system(.subheadline, weight: .semibold))
