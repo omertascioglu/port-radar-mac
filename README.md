@@ -1,4 +1,8 @@
-# DevPort
+<p align="center">
+  <img src="Support/AppIcon.png" alt="Port Radar" width="128" height="128">
+</p>
+
+# Port Radar
 
 A native macOS menu-bar app that detects dev servers listening on localhost — Vite, Next.js, Python, Docker, and anything else bound to a TCP port — and lets you inspect and kill them without hunting through terminals.
 
@@ -7,23 +11,23 @@ Swift + SwiftUI (`MenuBarExtra`), macOS 14+. No Xcode project: built with Swift 
 ## Build & run
 
 ```bash
-make run      # build, assemble DevPort.app, sign (ad-hoc), launch
+make run      # build, assemble Port Radar.app, sign (ad-hoc), launch
 make build    # compile only (swift build -c release)
-make bundle   # build + assemble/sign DevPort.app without launching
-make clean    # remove .build/ and DevPort.app
+make bundle   # build + assemble/sign Port Radar.app without launching
+make clean    # remove .build/ and Port Radar.app
 ```
 
 The Makefile wraps the compiled binary into a proper `.app` bundle because two things require one: user notifications (need a bundle identifier) and `LSUIElement` (menu-bar only, no Dock icon).
 
 ## Quick test
 
-With DevPort running, start a throwaway listener in another terminal:
+With Port Radar running, start a throwaway listener in another terminal:
 
 ```bash
 python3 -m http.server 8128
 ```
 
-It should appear in the menu bar within a few seconds as a Python row on `localhost:8128`. Use Stop there to exercise kill, or `Ctrl+C` in the terminal. DevPort itself does not listen on a port, so it will not show up in its own list.
+It should appear in the menu bar within a few seconds as a Python row on `localhost:8128`. Use Stop there to exercise kill, or `Ctrl+C` in the terminal. Port Radar itself does not listen on a port, so it will not show up in its own list.
 
 ## How it works
 
