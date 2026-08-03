@@ -9,7 +9,7 @@ struct DevPortApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("DevPort", systemImage: "antenna.radiowaves.left.and.right") {
+        MenuBarExtra("Port Radar", systemImage: "antenna.radiowaves.left.and.right") {
             ContentView()
         }
         .menuBarExtraStyle(.window)

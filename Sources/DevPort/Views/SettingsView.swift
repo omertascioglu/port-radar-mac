@@ -43,6 +43,15 @@ struct SettingsModal: View {
                             .toggleStyle(.switch)
                             .controlSize(.small)
                     }
+
+                    Divider().padding(.leading, 12)
+
+                    settingsRow("Ask about process") {
+                        Toggle("", isOn: $preferences.askAboutProcessEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
                 }
 
                 settingsGroup {

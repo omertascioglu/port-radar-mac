@@ -15,6 +15,7 @@ final class Preferences {
         static let portMax = "portRangeMax"
         static let allowlist = "processAllowlist"
         static let preferredIDE = "preferredIDEBundleID"
+        static let askAboutProcess = "askAboutProcessEnabled"
     }
 
     /// Default matches the scanner's original interval.
@@ -50,6 +51,11 @@ final class Preferences {
         didSet { UserDefaults.standard.set(preferredIDEBundleID, forKey: Key.preferredIDE) }
     }
 
+    /// Show “Ask about process” (Apple Intelligence). On by default; turn off if unsupported or unwanted.
+    var askAboutProcessEnabled: Bool {
+        didSet { UserDefaults.standard.set(askAboutProcessEnabled, forKey: Key.askAboutProcess) }
+    }
+
     var preferredIDEName: String {
         IDEDetector.displayName(for: preferredIDEBundleID) ?? "Editor"
     }
@@ -69,6 +75,12 @@ final class Preferences {
             notificationsEnabled = true
         } else {
             notificationsEnabled = UserDefaults.standard.bool(forKey: Key.notifications)
+        }
+
+        if UserDefaults.standard.object(forKey: Key.askAboutProcess) == nil {
+            askAboutProcessEnabled = true
+        } else {
+            askAboutProcessEnabled = UserDefaults.standard.bool(forKey: Key.askAboutProcess)
         }
 
         hideSystemProcesses = UserDefaults.standard.bool(forKey: Key.hideSystem)

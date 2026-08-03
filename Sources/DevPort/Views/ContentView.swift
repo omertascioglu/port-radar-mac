@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var killPhase: KillPhase = .confirm
     @State private var showQuitConfirm = false
     @State private var showSettings = false
+    @State private var agentServer: DevServer?
 
     private var visibleServers: [DevServer] {
         state.servers.filter { preferences.matchesFilters($0) }
@@ -83,7 +84,7 @@ struct ContentView: View {
     }
 
     private var isModalPresented: Bool {
-        killPrompt != nil || showQuitConfirm || showSettings
+        killPrompt != nil || showQuitConfirm || showSettings || agentServer != nil
     }
 
     var body: some View {
@@ -128,12 +129,22 @@ struct ContentView: View {
             } else if showSettings {
                 SettingsModal(onDismiss: { showSettings = false })
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if let agentServer {
+                Group {
+                    if #available(macOS 26.0, *) {
+                        AgentChatModal(server: agentServer, onDismiss: { self.agentServer = nil })
+                    } else {
+                        AgentUnavailableModal(server: agentServer, onDismiss: { self.agentServer = nil })
+                    }
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .frame(width: 380)
         .animation(.easeOut(duration: 0.15), value: killPrompt?.id)
         .animation(.easeOut(duration: 0.15), value: showQuitConfirm)
         .animation(.easeOut(duration: 0.15), value: showSettings)
+        .animation(.easeOut(duration: 0.15), value: agentServer?.id)
     }
 
     private func runKill(_ prompt: KillPrompt) async {
@@ -153,7 +164,7 @@ struct ContentView: View {
 
     private var header: some View {
         HStack {
-            Text("DevPort")
+            Text("Port Radar")
                 .font(.headline)
             Spacer()
             Text("\(visibleServers.count) listening")
@@ -178,11 +189,18 @@ struct ContentView: View {
                 ForEach(groups) { group in
                     GroupHeader(group: group)
                     ForEach(group.servers) { server in
-                        ServerRow(server: server) { force in
-                            guard !isModalPresented else { return }
-                            killPhase = .confirm
-                            killPrompt = KillPrompt(server: server, force: force)
-                        }
+                        ServerRow(
+                            server: server,
+                            onAskAgent: {
+                                guard !isModalPresented else { return }
+                                agentServer = server
+                            },
+                            onKill: { force in
+                                guard !isModalPresented else { return }
+                                killPhase = .confirm
+                                killPrompt = KillPrompt(server: server, force: force)
+                            }
+                        )
                     }
                 }
             }
@@ -220,7 +238,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "power")
-                    Text("Quit DevPort")
+                    Text("Quit Port Radar")
                     Spacer()
                     Text("⌘Q")
                         .font(.caption)
@@ -242,7 +260,7 @@ struct QuitModal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Quit DevPort?")
+                Text("Quit Port Radar?")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
 
@@ -477,9 +495,16 @@ struct GroupHeader: View {
 
 struct ServerRow: View {
     let server: DevServer
+    let onAskAgent: () -> Void
     let onKill: (_ force: Bool) -> Void
 
-    private var editorName: String { Preferences.shared.preferredIDEName }
+    private var preferences: Preferences { Preferences.shared }
+    private var editorName: String { preferences.preferredIDEName }
+    private var folderPath: String? {
+        server.project?.rootPath ?? server.workingDirectory
+    }
+    private var showAsk: Bool { preferences.askAboutProcessEnabled }
+    private var hasMenuActions: Bool { showAsk || folderPath != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -551,7 +576,11 @@ struct ServerRow: View {
             .help("Open localhost:\(String(server.port)) in browser")
 
             Menu {
-                if let path = server.project?.rootPath ?? server.workingDirectory {
+                if showAsk {
+                    Button("Ask about process") { onAskAgent() }
+                }
+                if let path = folderPath {
+                    if showAsk { Divider() }
                     Button("Reveal in Finder") { OpenActions.revealInFinder(path) }
                     Button("Open in \(editorName)") {
                         OpenActions.openInEditor(path)
@@ -566,7 +595,7 @@ struct ServerRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("More actions")
-            .disabled(server.project?.rootPath == nil && server.workingDirectory == nil)
+            .disabled(!hasMenuActions)
 
             Button {
                 onKill(false)
