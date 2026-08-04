@@ -1,69 +1,794 @@
 import Image from "next/image";
+import type { ReactNode } from "react";
+import { site } from "@/lib/site";
 
-export default function Home() {
+export default function HomePage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
+    <div className="relative min-h-full overflow-x-hidden bg-paper text-ink">
+      <Atmosphere />
+      <Nav />
+      <Hero />
+      <Features />
+      <Download />
+      <Footer />
+    </div>
+  );
+}
+
+function Atmosphere() {
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
+      <div
+        className="absolute inset-0"
+        style={{
+          background: `
+            radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255,255,255,0.9), transparent 55%),
+            radial-gradient(ellipse 45% 40% at 80% 60%, rgba(13,148,136,0.07), transparent 50%),
+            linear-gradient(180deg, #f5f6f8 0%, #eceef2 50%, #e6e9ef 100%)
+          `,
+        }}
+      />
+    </div>
+  );
+}
+
+function Nav() {
+  return (
+    <nav className="mx-auto flex w-full max-w-[1120px] items-center justify-between px-6 pt-7 md:px-10">
+      <a href="#top" className="flex items-center gap-2.5">
         <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
+          src="/brand/app-icon.png"
+          alt=""
+          width={28}
+          height={28}
+          className="h-7 w-7"
           priority
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+        <span className="font-display text-[15px] font-semibold tracking-[-0.03em] text-ink">
+          Port Radar
+        </span>
+      </a>
+      <a
+        href={site.downloadUrl}
+        className="download-cta-sm inline-flex h-9 items-center rounded-[10px] px-4 text-[13px] font-semibold"
+      >
+        Download
+      </a>
+    </nav>
+  );
+}
+
+function Hero() {
+  return (
+    <header id="top" className="relative mx-auto w-full max-w-[1120px] px-6 pb-10 pt-8 md:px-10 md:pt-12">
+      <div className="mx-auto max-w-[42rem] text-center">
+        <h1 className="enter font-display text-[clamp(2.15rem,5.4vw,3.65rem)] font-semibold leading-[1.02] tracking-[-0.045em] text-ink">
+          Ask AI what&apos;s
+          <br />
+          running on your Mac.
+        </h1>
+        <p className="enter-d1 mx-auto mt-4 max-w-[36rem] text-[1.05rem] font-light leading-relaxed text-muted md:text-[1.12rem]">
+          Mystery ports. Forgotten Vite servers. Random{" "}
+          <span className="font-mono text-[0.95em] text-ink/70">node</span> eating CPU.
+          Port Radar finds everything listening — then{" "}
+          <span className="font-medium text-ink">Apple Intelligence</span> tells you
+          what it is, why it&apos;s there, and if it&apos;s safe to kill. On-device.
+          Nothing leaves your Mac.
+        </p>
+
+        {/* Primary CTA — first viewport, no scroll required */}
+        <div className="enter-d2 mt-7 flex flex-col items-center gap-2.5">
+          <a
+            href={site.downloadUrl}
+            className="download-cta inline-flex h-[3.75rem] min-w-[17.5rem] items-center justify-center gap-3 rounded-[16px] px-10 text-[17px] font-semibold tracking-[-0.015em]"
+          >
+            <span className="flex items-center gap-3">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                <path d="M18.71 19.5C17.88 20.74 17 21.95 15.66 21.97C14.32 22 13.89 21.18 12.37 21.18C10.84 21.18 10.37 21.95 9.1 22C7.79 22.05 6.8 20.68 5.96 19.47C4.25 16.45 2.93 11.27 4.7 7.82C5.57 6.11 7.3 5.09 9.17 5.07C10.46 5.04 11.68 5.95 12.5 5.95C13.32 5.95 14.8 4.85 16.39 5.03C17.07 5.06 18.9 5.3 20.16 7.07C20.05 7.14 17.73 8.51 17.75 11.31C17.78 14.67 20.56 15.76 20.6 15.77C20.56 15.87 20.15 17.32 19.12 18.8L18.71 19.5ZM13 3.5C13.73 2.67 14.94 2.04 15.94 2C16.07 3.17 15.6 4.35 14.9 5.19C14.21 6.04 13.07 6.7 11.95 6.61C11.8 5.46 12.36 4.26 13 3.5Z" />
+              </svg>
+              Download for Mac
+              <span className="ml-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 4v12" />
+                  <path d="M7 12l5 5 5-5" />
+                  <path d="M5 20h14" />
+                </svg>
+              </span>
+            </span>
+          </a>
+          <p className="text-[12px] font-medium text-faint">
+            Free · Apple Intelligence · on-device
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </div>
+
+      <div className="enter-d3 relative mx-auto mt-10 max-w-[680px] md:mt-12">
+        <AppScreenshot />
+      </div>
+    </header>
+  );
+}
+
+/** Marketing mock of the real MenuBarExtra window (ContentView @ 380pt) — dark mode. */
+function AppScreenshot() {
+  return (
+    <div className="relative mx-auto w-full max-w-[420px]">
+      <div
+        aria-hidden
+        className="absolute -inset-x-10 -bottom-8 top-20 -z-10 rounded-[50%] bg-ink/[0.18] blur-3xl"
+      />
+
+      {/* Menu bar status item — antenna.radiowaves.left.and.right */}
+      <div className="mb-2.5 flex justify-end pr-1">
+        <div className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] text-ink/70">
+          <AntennaIcon className="h-[15px] w-[15px]" />
         </div>
-      </main>
+      </div>
+
+      {/* Dark MenuBarExtra material */}
+      <div
+        className="overflow-hidden rounded-[12px] border border-white/[0.08] text-[13px] text-white shadow-[0_22px_60px_rgba(8,10,16,0.45),0_2px_8px_rgba(8,10,16,0.25)]"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(44,44,46,0.96) 0%, rgba(28,28,30,0.98) 100%)",
+          backdropFilter: "blur(40px)",
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-3 py-2">
+          <span className="text-[13px] font-semibold tracking-[-0.01em]">Port Radar</span>
+          <span className="text-[11px] text-white/40">4 listening</span>
+        </div>
+        <div className="h-px bg-white/[0.1]" />
+
+        {/* Server list */}
+        <div className="pb-1">
+          <GroupHeader framework="next" name="checkout-web" path="~/dev/checkout-web" />
+          <ServerRow
+            name="node"
+            pid="48201"
+            command="next dev"
+            port="3000"
+            uptime="2h 14m"
+          />
+          <ServerRow
+            name="node"
+            pid="48244"
+            command="vite"
+            port="5173"
+            uptime="2h 14m"
+            shared
+          />
+
+          <GroupHeader framework="python" name="api" path="~/dev/api" />
+          <ServerRow
+            name="Python"
+            pid="39112"
+            command="uvicorn main:app --reload"
+            port="8000"
+            uptime="6h 02m"
+          />
+
+          <GroupHeader name="Other" />
+          <ServerRow
+            name="Python"
+            pid="12884"
+            command="/usr/bin/python3 -m http.server 8128"
+            port="8128"
+            uptime="14h 01m"
+            orphan
+          />
+        </div>
+
+        <div className="h-px bg-white/[0.1]" />
+        <FooterItem icon="network" label="Tunnels" trailing="1" />
+        <div className="h-px bg-white/[0.1]" />
+        <FooterItem icon="gear" label="Settings" />
+        <div className="h-px bg-white/[0.1]" />
+        <FooterItem icon="power" label="Quit Port Radar" />
+      </div>
     </div>
+  );
+}
+
+function GroupHeader({
+  name,
+  path,
+  framework,
+}: {
+  name: string;
+  path?: string;
+  framework?: "next" | "python" | "vite";
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 pb-0.5 pt-2">
+      {framework === "next" && <NextMark />}
+      {framework === "python" && <PythonMark />}
+      {framework === "vite" && (
+        <svg width="14" height="14" viewBox="0 0 24 24" className="shrink-0 text-white/45" fill="currentColor">
+          <path d="M13 2L4.5 13.5h5L9 22l10-14h-5.5L13 2z" />
+        </svg>
+      )}
+      <span className="text-[12px] font-semibold text-white/95">{name}</span>
+      {path && (
+        <span className="min-w-0 truncate text-[10px] text-white/30">{path}</span>
+      )}
+    </div>
+  );
+}
+
+function ServerRow({
+  name,
+  pid,
+  command,
+  port,
+  uptime,
+  orphan,
+  shared,
+}: {
+  name: string;
+  pid: string;
+  command: string;
+  port: string;
+  uptime: string;
+  orphan?: boolean;
+  shared?: boolean;
+}) {
+  return (
+    <div className="px-3 py-1.5">
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`h-[7px] w-[7px] shrink-0 rounded-full ${
+            orphan ? "bg-[#ff9f0a]" : "bg-[#30d158]"
+          }`}
+        />
+        <span className="text-[13px] font-medium text-white">{name}</span>
+        {shared && (
+          <span className="rounded-full bg-cyan-400/20 px-[5px] py-px text-[10px] font-medium text-cyan-300">
+            Shared
+          </span>
+        )}
+        {orphan && (
+          <span className="rounded-full bg-orange-400/20 px-[5px] py-px text-[10px] font-medium text-orange-300">
+            Orphan
+          </span>
+        )}
+        <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-white/30">{uptime}</span>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/45">{port}</span>
+        <span className="flex shrink-0 items-center gap-[5px] text-white/40">
+          <SafariIcon />
+          <EllipsisIcon />
+          <StopIcon />
+          <ForceIcon />
+        </span>
+      </div>
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 pl-[13px] text-[10px] text-white/30">
+        <span className="shrink-0">pid {pid}</span>
+        <span className="min-w-0 truncate">{command}</span>
+      </div>
+    </div>
+  );
+}
+
+function FooterItem({
+  icon,
+  label,
+  trailing,
+}: {
+  icon: "network" | "gear" | "power";
+  label: string;
+  trailing?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-[9px] text-[13px] text-white/90">
+      <span className="text-white/45">
+        {icon === "network" && <NetworkIcon />}
+        {icon === "gear" && <GearIcon />}
+        {icon === "power" && <PowerIcon />}
+      </span>
+      <span>{label}</span>
+      {trailing && <span className="ml-auto text-[11px] text-white/35">{trailing}</span>}
+    </div>
+  );
+}
+
+function AntennaIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M4.5 14.5a8 8 0 0 1 15 0" />
+      <path d="M7.5 17a4.5 4.5 0 0 1 9 0" />
+      <circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none" />
+      <path d="M12 4v8" />
+    </svg>
+  );
+}
+
+function NextMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 text-white/45" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.2" y="1.2" width="11.6" height="11.6" rx="2.4" />
+      <path d="M4.5 10.5V3.5L9.5 10.5M9.5 10.5V3.5" />
+    </svg>
+  );
+}
+
+function PythonMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 text-white/45" fill="none" stroke="currentColor" strokeWidth="1.1">
+      <circle cx="5.2" cy="5" r="3.2" />
+      <circle cx="8.8" cy="9" r="3.2" />
+    </svg>
+  );
+}
+
+function SafariIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M15.5 8.5l-2.2 5.8-5.8 2.2 2.2-5.8z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M15.5 8.5l-2.2 5.8-5.8 2.2 2.2-5.8z" />
+    </svg>
+  );
+}
+
+function EllipsisIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="8" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="16" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="9" />
+      <rect x="9" y="9" width="6" height="6" rx="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function ForceIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M13 6.5L9.5 13h3L11 17.5 14.5 11h-3L13 6.5z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function NetworkIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+      <circle cx="12" cy="12" r="2.5" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.5v2.2M12 19.3v2.2M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6" />
+    </svg>
+  );
+}
+
+function PowerIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M12 3v9" />
+      <path d="M7.2 6.3a7.5 7.5 0 1 0 9.6 0" />
+    </svg>
+  );
+}
+
+function Features() {
+  return (
+    <section id="how" className="relative border-t border-line">
+      {/* AI ask */}
+      <div className="relative overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background: `
+              radial-gradient(ellipse 70% 80% at 85% 40%, rgba(13,148,136,0.09), transparent 55%),
+              radial-gradient(ellipse 50% 60% at 10% 80%, rgba(12,14,20,0.04), transparent 50%)
+            `,
+          }}
+        />
+
+        <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
+          <div>
+            <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-signal">
+              Apple Intelligence
+            </p>
+            <h2 className="mt-3 font-display text-[clamp(2rem,4vw,3.1rem)] font-semibold leading-[1.05] tracking-[-0.04em] text-ink">
+              What&apos;s on 5173?
+              <br />
+              <span className="text-muted">Just ask.</span>
+            </h2>
+            <p className="mt-5 max-w-[28rem] text-[1.05rem] font-light leading-relaxed text-muted">
+              Pick any process. Apple Intelligence reads the command, project, and
+              context — then tells you what it is, why it&apos;s running, and whether
+              you should kill it. On-device. Private. No cloud.
+            </p>
+            <ul className="mt-8 space-y-3 text-[14px] text-ink/80">
+              {[
+                "“Is this safe to kill?”",
+                "“Why has this been up 14 hours?”",
+                "“Which project owns this port?”",
+              ].map((q) => (
+                <li key={q} className="flex items-start gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-signal" />
+                  <span className="font-medium tracking-[-0.01em]">{q}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <AskChatMock />
+        </div>
+      </div>
+
+      {/* Cloudflare share — same visual weight as AI */}
+      <div className="relative overflow-hidden border-t border-line">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background: `
+              radial-gradient(ellipse 65% 70% at 15% 45%, rgba(246,128,33,0.10), transparent 55%),
+              radial-gradient(ellipse 40% 50% at 90% 20%, rgba(13,148,136,0.06), transparent 50%)
+            `,
+          }}
+        />
+
+        <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
+          <ShareTunnelMock />
+
+          <div className="md:order-none order-first">
+            <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-[#f6821f]">
+              Cloudflare Tunnel
+            </p>
+            <h2 className="mt-3 font-display text-[clamp(2rem,4vw,3.1rem)] font-semibold leading-[1.05] tracking-[-0.04em] text-ink">
+              Localhost → live link.
+              <br />
+              <span className="text-muted">One click.</span>
+            </h2>
+            <p className="mt-5 max-w-[30rem] text-[1.05rem] font-light leading-relaxed text-muted">
+              Shipping a preview to a teammate or client? Hit Share. Port Radar
+              spins up a Cloudflare tunnel and hands you a public URL for your
+              local app — in seconds. No CLI. No account dance. No ngrok ritual.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-2.5">
+              {[
+                "One-button share",
+                "Auto-installs cloudflared",
+                "Copy public URL",
+                "Stop anytime",
+              ].map((t) => (
+                <span
+                  key={t}
+                  className="inline-flex items-center rounded-full border border-line bg-white/60 px-3.5 py-1.5 text-[12.5px] font-medium text-ink/80"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Supporting moves */}
+      <div className="border-t border-line bg-ink/[0.03]">
+        <div className="mx-auto grid max-w-[1120px] gap-0 md:grid-cols-2">
+          <Capability
+            eyebrow="Scan"
+            title="See every listening port"
+            body="Vite, Next, Python, Docker, orphans — grouped by project."
+            visual={<PortsVisual />}
+          />
+          <Capability
+            eyebrow="Control"
+            title="Stop it cleanly"
+            body="Graceful stop or force kill — with confirmation. No more hunting PIDs."
+            visual={<ActionsVisual />}
+            border
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Capability({
+  eyebrow,
+  title,
+  body,
+  visual,
+  border,
+}: {
+  eyebrow: string;
+  title: string;
+  body: string;
+  visual: ReactNode;
+  border?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col justify-between gap-8 px-6 py-12 md:px-10 md:py-14 ${
+        border ? "border-t border-line md:border-l md:border-t-0" : ""
+      }`}
+    >
+      <div>
+        <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-faint">{eyebrow}</p>
+        <h3 className="mt-2 font-display text-[1.55rem] font-semibold tracking-[-0.03em] text-ink">
+          {title}
+        </h3>
+        <p className="mt-2 max-w-sm text-[15px] font-light leading-relaxed text-muted">{body}</p>
+      </div>
+      {visual}
+    </div>
+  );
+}
+
+function AskChatMock() {
+  return (
+    <div className="relative mx-auto w-full max-w-[380px]">
+      <div
+        aria-hidden
+        className="absolute -inset-6 -z-10 rounded-[40%] bg-ink/20 blur-3xl"
+      />
+      <div
+        className="overflow-hidden rounded-[14px] border border-white/12 shadow-[0_28px_70px_rgba(8,10,16,0.5)]"
+        style={{
+          background: "linear-gradient(180deg, #2c2c2e 0%, #1c1c1e 100%)",
+        }}
+      >
+        <div className="flex items-start justify-between px-3.5 pb-2.5 pt-3.5">
+          <div>
+            <p className="text-[14px] font-semibold text-white">Ask about process</p>
+            <p className="mt-0.5 font-mono text-[10px] text-white/40">
+              node · localhost:5173 · pid 48244
+            </p>
+          </div>
+          <span className="text-white/35">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm3.54 12.46-1.08 1.08L12 13.08l-2.46 2.46-1.08-1.08L10.92 12 8.46 9.54l1.08-1.08L12 10.92l2.46-2.46 1.08 1.08L13.08 12l2.46 2.46Z" />
+            </svg>
+          </span>
+        </div>
+        <div className="h-px bg-white/10" />
+
+        <div className="space-y-3 px-3 py-3">
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-[10px] bg-[#0a84ff]/22 px-2.5 py-2 text-[12.5px] leading-snug text-white/95">
+              What is this and can I kill it?
+            </div>
+          </div>
+          <div className="flex justify-start">
+            <div className="max-w-[92%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12.5px] leading-snug text-white/90">
+              <p>
+                This is a <span className="font-medium text-white">Vite</span> dev
+                server for <span className="font-mono text-[11px] text-teal-300">checkout-web</span>
+                {" "}on port 5173. It&apos;s been up 2h 14m.
+              </p>
+              <p className="mt-2 text-white/70">
+                Safe to kill — it&apos;s just a local frontend. Restart with{" "}
+                <span className="font-mono text-[11px] text-white/85">npm run dev</span>.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-px bg-white/10" />
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          <span className="flex-1 truncate text-[12px] text-white/30">
+            Ask about this process…
+          </span>
+          <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-[#0a84ff] text-white">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round">
+              <path d="M12 19V5" />
+              <path d="M6 11l6-6 6 6" />
+            </svg>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShareTunnelMock() {
+  return (
+    <div className="relative mx-auto w-full max-w-[420px]">
+      <div
+        aria-hidden
+        className="absolute -inset-8 -z-10 rounded-[45%] bg-[#f6821f]/25 blur-3xl"
+      />
+
+      {/* Bridge: localhost → live */}
+      <div className="mb-4 flex items-center justify-center gap-3 text-[12px] font-medium">
+        <span className="rounded-full border border-line bg-white/70 px-3 py-1 font-mono text-ink/70">
+          localhost:5173
+        </span>
+        <span className="tunnel-flow flex items-center text-[#f6821f]" aria-hidden>
+          <svg width="28" height="12" viewBox="0 0 28 12" fill="none">
+            <path d="M1 6h22" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            <path d="M19 2l5 4-5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#f6821f] px-3 py-1 text-white shadow-[0_8px_20px_-6px_rgba(246,130,31,0.65)]">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-white" />
+          </span>
+          Live
+        </span>
+      </div>
+
+      <div
+        className="overflow-hidden rounded-[14px] border border-white/12 shadow-[0_28px_70px_rgba(8,10,16,0.5)]"
+        style={{
+          background: "linear-gradient(180deg, #2c2c2e 0%, #1c1c1e 100%)",
+        }}
+      >
+        <div className="flex items-start justify-between px-3.5 pb-2.5 pt-3.5">
+          <div>
+            <p className="text-[14px] font-semibold text-white">Tunnels</p>
+            <p className="mt-0.5 text-[10px] text-white/40">
+              Cloudflare quick tunnels · public while active
+            </p>
+          </div>
+          <span className="text-white/35">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm3.54 12.46-1.08 1.08L12 13.08l-2.46 2.46-1.08-1.08L10.92 12 8.46 9.54l1.08-1.08L12 10.92l2.46-2.46 1.08 1.08L13.08 12l2.46 2.46Z" />
+            </svg>
+          </span>
+        </div>
+        <div className="h-px bg-white/10" />
+
+        <div className="space-y-2.5 p-3">
+          <div className="rounded-[10px] bg-white/[0.06] p-3 ring-1 ring-white/8">
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium text-white">node</span>
+              <span className="font-mono text-[11px] text-white/40">:5173</span>
+              <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#30d158]/18 px-2 py-0.5 text-[10px] font-semibold text-[#30d158]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#30d158]" />
+                Live
+              </span>
+            </div>
+            <p className="mt-2 break-all font-mono text-[11px] leading-relaxed text-[#7dd3fc]">
+              https://checkout-web-preview.trycloudflare.com
+            </p>
+            <div className="mt-3 flex gap-2">
+              <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-white/10 text-[12px] font-semibold text-white/90 ring-1 ring-white/12">
+                Copy URL
+              </span>
+              <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-[#c62828]/25 text-[12px] font-semibold text-[#ff8a80] ring-1 ring-[#c62828]/30">
+                Stop
+              </span>
+            </div>
+          </div>
+
+          <div className="rounded-[10px] border border-dashed border-white/12 px-3 py-3 text-center text-[11px] text-white/35">
+            Share any port from the ⋯ menu — one click.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PortsVisual() {
+  const ports = [
+    { port: "3000", tag: "next", ok: true },
+    { port: "5173", tag: "vite", ok: true },
+    { port: "8000", tag: "api", ok: true },
+    { port: "8128", tag: "orphan", ok: false },
+  ];
+  return (
+    <div className="flex flex-wrap gap-2">
+      {ports.map((p) => (
+        <div
+          key={p.port}
+          className="inline-flex items-center gap-2 rounded-[10px] border border-line bg-paper/80 px-3 py-2 shadow-sm"
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${p.ok ? "bg-[#30d158]" : "bg-[#ff9f0a]"}`}
+          />
+          <span className="font-mono text-[13px] font-medium tabular-nums text-ink">{p.port}</span>
+          <span className="text-[11px] text-faint">{p.tag}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActionsVisual() {
+  const actions = [
+    { label: "Stop", tone: "stop" },
+    { label: "Force kill", tone: "force" },
+    { label: "Open", tone: "open" },
+  ];
+  return (
+    <div className="flex flex-wrap gap-2">
+      {actions.map((a) => (
+        <div
+          key={a.label}
+          className={`inline-flex h-10 items-center rounded-[10px] px-4 text-[13px] font-semibold tracking-[-0.01em] ${
+            a.tone === "stop"
+              ? "bg-ink text-paper"
+              : a.tone === "force"
+                ? "bg-[#c62828]/12 text-[#b71c1c] ring-1 ring-[#c62828]/20"
+                : "bg-white/70 text-ink ring-1 ring-line"
+          }`}
+        >
+          {a.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Download() {
+  return (
+    <section id="download" className="border-t border-line">
+      <div className="mx-auto flex max-w-[1120px] flex-col items-center px-6 py-28 text-center md:px-10 md:py-36">
+        <Image
+          src="/brand/app-icon.png"
+          alt=""
+          width={64}
+          height={64}
+          className="mb-8 h-14 w-14"
+        />
+        <h2 className="font-display text-[clamp(1.9rem,3.5vw,2.8rem)] font-semibold tracking-[-0.04em] text-ink">
+          Stop guessing what&apos;s listening.
+        </h2>
+        <p className="mt-4 max-w-md text-[1.05rem] font-light text-muted">
+          Download Port Radar. Ask Apple Intelligence. Figure out your Mac.
+        </p>
+        <a
+          href={site.downloadUrl}
+          className="download-cta mt-9 inline-flex h-14 min-w-[16rem] items-center justify-center rounded-[16px] px-9 text-[16px] font-semibold"
+        >
+          <span>Download for macOS</span>
+        </a>
+        <p className="mt-4 text-[12px] font-light text-faint">
+          macOS 14+ · Apple Silicon & Intel · Apple Intelligence on macOS 26+
+        </p>
+        <a
+          href={site.githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-8 text-[13px] font-medium text-muted underline decoration-line underline-offset-4 hover:text-ink"
+        >
+          View source
+        </a>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="border-t border-line">
+      <div className="mx-auto flex max-w-[1120px] flex-col gap-2 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
+        <div className="flex items-center gap-2">
+          <Image src="/brand/app-icon.png" alt="" width={18} height={18} className="h-[18px] w-[18px]" />
+          <span className="font-display text-[13px] font-semibold tracking-tight text-ink">
+            Port Radar
+          </span>
+        </div>
+        <p className="text-[11px] font-light text-faint">
+          Native macOS utility. Not affiliated with Apple or Cloudflare.
+        </p>
+      </div>
+    </footer>
   );
 }

@@ -1,26 +1,197 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #eceef2;
+  --ink: #0c0e14;
+  --muted: #5c6372;
+  --faint: #8b91a0;
+  --line: rgba(12, 14, 20, 0.09);
+  --signal: #0d9488;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Premium Mac-style CTA — glass sheen + ink depth, not a flat fill */
+.download-cta {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #f7f8fa;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(165deg, #2a2f3a 0%, #0c0e14 48%, #151922 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.22) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
+    0 12px 32px -10px rgba(12, 14, 20, 0.55),
+    0 4px 10px -4px rgba(12, 14, 20, 0.35);
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+.download-cta::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.18) 48%,
+    transparent 62%
+  );
+  transform: translateX(-120%);
+  animation: cta-shine 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.download-cta > * {
+  position: relative;
+  z-index: 1;
+}
+
+.download-cta:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.28) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
+    0 16px 40px -10px rgba(12, 14, 20, 0.6),
+    0 6px 14px -4px rgba(12, 14, 20, 0.4);
+}
+
+.download-cta:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.download-cta-sm {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #f7f8fa;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(165deg, #2a2f3a 0%, #0c0e14 48%, #151922 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.2) inset,
+    0 6px 16px -6px rgba(12, 14, 20, 0.45);
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.download-cta-sm:hover {
+  filter: brightness(1.08);
+  transform: translateY(-0.5px);
+}
+
+@keyframes cta-shine {
+  0%,
+  55% {
+    transform: translateX(-120%);
+  }
+  75%,
+  100% {
+    transform: translateX(120%);
   }
 }
 
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-signal: var(--signal);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  min-height: 100%;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--signal) 24%, white);
+  color: var(--ink);
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes tunnel-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateX(4px);
+    opacity: 1;
+  }
+}
+
+.tunnel-flow {
+  animation: tunnel-nudge 1.6s ease-in-out infinite;
+}
+
+.enter {
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.enter-d1 {
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+}
+.enter-d2 {
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.22s both;
+}
+.enter-d3 {
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.34s both;
+}
+.float-y {
+  animation: float-y 9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enter,
+  .enter-d1,
+  .enter-d2,
+  .enter-d3,
+  .float-y,
+  .tunnel-flow,
+  .download-cta::before {
+    animation: none;
+  }
 }
