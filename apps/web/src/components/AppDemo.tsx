@@ -43,7 +43,7 @@ type TargetId =
 
 type AskPhase = "compose" | "typing" | "sent" | "thinking" | "reply";
 
-const ASK_QUESTION = "What is this and can I kill it?";
+const ASK_QUESTION = "What is this — can I stop it?";
 
 /** One move → one click → hold panel. Slow enough to read. */
 const SCRIPT: { step: Step; ms: number }[] = [
@@ -488,7 +488,7 @@ function AskOverlay({ phase }: { phase: AskPhase }) {
       <div className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-hidden px-3 py-3">
         {!showUser && (
           <p className="text-[11px] leading-relaxed text-white/35">
-            Ask anything — what it is, why it&apos;s running, if it&apos;s safe to kill…
+            Ask anything — what it is, why it&apos;s running, if it&apos;s safe to stop…
           </p>
         )}
 
@@ -511,7 +511,7 @@ function AskOverlay({ phase }: { phase: AskPhase }) {
           <div className="demo-fade flex justify-start">
             <div className="max-w-[94%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12px] leading-snug text-white/90">
               Vite for <span className="font-mono text-[11px] text-teal-300">checkout-web</span>.
-              Safe to kill — restart with{" "}
+              Safe to stop — restart with{" "}
               <span className="font-mono text-[11px]">npm run dev</span>.
             </div>
           </div>
@@ -602,7 +602,7 @@ function StopOverlay({ phase }: { phase: "confirm" | "working" | "done" }) {
       {phase === "confirm" && (
         <>
           <p className="mt-2.5 text-[12px] leading-relaxed text-white/50">
-            Asks the process to quit (SIGTERM). Force kills after a few seconds if it
+            Asks the process to quit (SIGTERM). Force-stops after a few seconds if it
             doesn&apos;t exit.
           </p>
           <div className="mt-4 flex gap-2">

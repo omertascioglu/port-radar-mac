@@ -74,7 +74,7 @@ function Hero() {
           <span className="font-mono text-[0.95em] text-ink/70">node</span> eating CPU.
           Port Radar finds everything listening — then{" "}
           <span className="font-medium text-ink">Apple Intelligence</span> tells you
-          what it is, why it&apos;s there, and if it&apos;s safe to kill. On-device.
+          what it is, why it&apos;s there, and if it&apos;s safe to stop. On-device.
           Nothing leaves your Mac.
         </p>
 
@@ -141,11 +141,11 @@ function Features() {
             <p className="mt-5 max-w-[28rem] text-[1.05rem] font-light leading-relaxed text-muted">
               Pick any process. Apple Intelligence reads the command, project, and
               context — then tells you what it is, why it&apos;s running, and whether
-              you should kill it. On-device. Private. No cloud.
+              you should stop it. On-device. Private. No cloud.
             </p>
             <ul className="mt-8 space-y-3 text-[14px] text-ink/80">
               {[
-                "“Is this safe to kill?”",
+                "“Is this safe to stop?”",
                 "“Why has this been up 14 hours?”",
                 "“Which project owns this port?”",
               ].map((q) => (
@@ -226,7 +226,7 @@ function Features() {
           <Capability
             eyebrow="Control"
             title="Stop it cleanly"
-            body="Graceful stop or force kill — with confirmation. No more hunting PIDs."
+            body="Graceful stop or force quit — with confirmation. No more hunting PIDs."
             visual={<ActionsVisual />}
             border
             delay={100}
@@ -302,7 +302,7 @@ function AskChatMock() {
         <div className="space-y-3 px-3 py-3">
           <div className="flex justify-end">
             <div className="max-w-[85%] rounded-[10px] bg-[#0a84ff]/22 px-2.5 py-2 text-[12.5px] leading-snug text-white/95">
-              What is this and can I kill it?
+              What is this — can I stop it?
             </div>
           </div>
           <div className="flex justify-start">
@@ -313,7 +313,7 @@ function AskChatMock() {
                 {" "}on port 5173. It&apos;s been up 2h 14m.
               </p>
               <p className="mt-2 text-white/70">
-                Safe to kill — it&apos;s just a local frontend. Restart with{" "}
+                Safe to stop — it&apos;s just a local frontend. Restart with{" "}
                 <span className="font-mono text-[11px] text-white/85">npm run dev</span>.
               </p>
             </div>
@@ -446,7 +446,7 @@ function PortsVisual() {
 function ActionsVisual() {
   const actions = [
     { label: "Stop", tone: "stop" },
-    { label: "Force kill", tone: "force" },
+    { label: "Force quit", tone: "force" },
     { label: "Open", tone: "open" },
   ];
   return (
