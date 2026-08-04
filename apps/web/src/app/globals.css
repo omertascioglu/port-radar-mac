@@ -152,6 +152,77 @@ body {
   }
 }
 
+@keyframes demo-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes demo-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes demo-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+    box-shadow: 0 0 0 0 rgba(224, 72, 72, 0.35);
+  }
+  50% {
+    filter: brightness(1.08);
+    box-shadow: 0 0 0 6px rgba(224, 72, 72, 0);
+  }
+}
+
+.demo-panel {
+  animation: demo-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.demo-fade {
+  animation: demo-fade 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.demo-pulse {
+  animation: demo-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes demo-click-ripple {
+  0% {
+    opacity: 0.85;
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.6);
+  }
+}
+
+.demo-click-ripple {
+  animation: demo-click-ripple 0.45s ease-out forwards;
+}
+
+@keyframes demo-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.demo-spinner {
+  animation: demo-spinner 0.75s linear infinite;
+}
+
 @keyframes tunnel-nudge {
   0%,
   100% {
@@ -191,6 +262,11 @@ body {
   .enter-d3,
   .float-y,
   .tunnel-flow,
+  .demo-panel,
+  .demo-fade,
+  .demo-pulse,
+  .demo-click-ripple,
+  .demo-spinner,
   .download-cta::before {
     animation: none;
   }
