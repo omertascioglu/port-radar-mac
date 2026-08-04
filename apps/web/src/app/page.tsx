@@ -1,6 +1,7 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { AppDemo } from "@/components/AppDemo";
+import { Reveal } from "@/components/Reveal";
 import { site } from "@/lib/site";
 
 export default function HomePage() {
@@ -35,7 +36,7 @@ function Atmosphere() {
 
 function Nav() {
   return (
-    <nav className="mx-auto flex w-full max-w-[1120px] items-center justify-between px-6 pt-7 md:px-10">
+    <nav className="nav-enter mx-auto flex w-full max-w-[1120px] items-center justify-between px-6 pt-7 md:px-10">
       <a href="#top" className="flex items-center gap-3">
         <Image
           src="/brand/app-icon.png"
@@ -128,7 +129,7 @@ function Features() {
         />
 
         <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
-          <div>
+          <Reveal>
             <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-signal">
               Apple Intelligence
             </p>
@@ -154,9 +155,11 @@ function Features() {
                 </li>
               ))}
             </ul>
-          </div>
+          </Reveal>
 
-          <AskChatMock />
+          <Reveal delay={120}>
+            <AskChatMock />
+          </Reveal>
         </div>
       </div>
 
@@ -174,9 +177,11 @@ function Features() {
         />
 
         <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
-          <ShareTunnelMock />
+          <Reveal>
+            <ShareTunnelMock />
+          </Reveal>
 
-          <div className="md:order-none order-first">
+          <Reveal delay={120} className="order-first md:order-none">
             <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-[#f6821f]">
               Cloudflare Tunnel
             </p>
@@ -205,7 +210,7 @@ function Features() {
                 </span>
               ))}
             </div>
-          </div>
+          </Reveal>
         </div>
       </div>
 
@@ -224,6 +229,7 @@ function Features() {
             body="Graceful stop or force kill — with confirmation. No more hunting PIDs."
             visual={<ActionsVisual />}
             border
+            delay={100}
           />
         </div>
       </div>
@@ -237,15 +243,18 @@ function Capability({
   body,
   visual,
   border,
+  delay = 0,
 }: {
   eyebrow: string;
   title: string;
   body: string;
   visual: ReactNode;
   border?: boolean;
+  delay?: number;
 }) {
   return (
-    <div
+    <Reveal
+      delay={delay}
       className={`flex flex-col justify-between gap-8 px-6 py-12 md:px-10 md:py-14 ${
         border ? "border-t border-line md:border-l md:border-t-0" : ""
       }`}
@@ -258,7 +267,7 @@ function Capability({
         <p className="mt-2 max-w-sm text-[15px] font-light leading-relaxed text-muted">{body}</p>
       </div>
       {visual}
-    </div>
+    </Reveal>
   );
 }
 
@@ -463,7 +472,7 @@ function ActionsVisual() {
 function Download() {
   return (
     <section id="download" className="border-t border-line">
-      <div className="mx-auto flex max-w-[1120px] flex-col items-center px-6 py-28 text-center md:px-10 md:py-36">
+      <Reveal className="mx-auto flex max-w-[1120px] flex-col items-center px-6 py-28 text-center md:px-10 md:py-36">
         <Image
           src="/brand/app-icon.png"
           alt=""
@@ -494,7 +503,7 @@ function Download() {
         >
           View source
         </a>
-      </div>
+      </Reveal>
     </section>
   );
 }

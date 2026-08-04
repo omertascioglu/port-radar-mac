@@ -238,6 +238,29 @@ body {
   animation: demo-caret 1s step-end infinite;
 }
 
+/* Scroll reveal — subtle rise + fade */
+.reveal {
+  opacity: 0;
+  transform: translateY(40px);
+  transition:
+    opacity 1.15s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 1.15s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.reveal-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 @keyframes tunnel-nudge {
   0%,
   100% {
@@ -254,17 +277,32 @@ body {
   animation: tunnel-nudge 1.6s ease-in-out infinite;
 }
 
+@keyframes enter-down {
+  from {
+    opacity: 0;
+    transform: translateY(-40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nav-enter {
+  animation: enter-down 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.35s both;
+}
+
 .enter {
-  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.8s both;
 }
 .enter-d1 {
-  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.92s both;
 }
 .enter-d2 {
-  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.22s both;
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 1.04s both;
 }
 .enter-d3 {
-  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 0.34s both;
+  animation: enter 1s cubic-bezier(0.16, 1, 0.3, 1) 1.18s both;
 }
 .float-y {
   animation: float-y 9s ease-in-out infinite;
@@ -275,6 +313,7 @@ body {
   .enter-d1,
   .enter-d2,
   .enter-d3,
+  .nav-enter,
   .float-y,
   .tunnel-flow,
   .demo-panel,
