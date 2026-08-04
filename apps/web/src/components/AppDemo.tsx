@@ -13,7 +13,15 @@ type Step =
   | "idle"
   | "move-ask"
   | "click-ask"
-  | "ask"
+  | "ask-menu"
+  | "move-ask-item"
+  | "click-ask-item"
+  | "ask-compose"
+  | "ask-type"
+  | "move-ask-send"
+  | "click-ask-send"
+  | "ask-thinking"
+  | "ask-reply"
   | "move-share"
   | "click-share"
   | "share"
@@ -24,14 +32,33 @@ type Step =
   | "stop-working"
   | "stop-done";
 
-type TargetId = "ask" | "share" | "stop" | "stop-confirm" | "rest";
+type TargetId =
+  | "ask"
+  | "ask-item"
+  | "ask-send"
+  | "share"
+  | "stop"
+  | "stop-confirm"
+  | "rest";
+
+type AskPhase = "compose" | "typing" | "sent" | "thinking" | "reply";
+
+const ASK_QUESTION = "What is this and can I kill it?";
 
 /** One move → one click → hold panel. Slow enough to read. */
 const SCRIPT: { step: Step; ms: number }[] = [
   { step: "idle", ms: 2200 },
   { step: "move-ask", ms: 1200 },
   { step: "click-ask", ms: 280 },
-  { step: "ask", ms: 4800 },
+  { step: "ask-menu", ms: 2000 },
+  { step: "move-ask-item", ms: 900 },
+  { step: "click-ask-item", ms: 280 },
+  { step: "ask-compose", ms: 800 },
+  { step: "ask-type", ms: 2800 },
+  { step: "move-ask-send", ms: 700 },
+  { step: "click-ask-send", ms: 280 },
+  { step: "ask-thinking", ms: 1100 },
+  { step: "ask-reply", ms: 4200 },
   { step: "idle", ms: 1200 },
   { step: "move-share", ms: 1200 },
   { step: "click-share", ms: 280 },
@@ -46,7 +73,10 @@ const SCRIPT: { step: Step; ms: number }[] = [
 ];
 
 function targetForStep(step: Step): TargetId {
-  if (step === "move-ask" || step === "click-ask") return "ask";
+  if (step === "move-ask" || step === "click-ask" || step === "ask-menu") return "ask";
+  if (step === "move-ask-item" || step === "click-ask-item") return "ask-item";
+  if (step === "move-ask-send" || step === "click-ask-send") return "ask-send";
+  if (step === "ask-compose" || step === "ask-type") return "rest";
   if (step === "move-share" || step === "click-share") return "share";
   if (step === "move-stop" || step === "click-stop") return "stop";
   if (
@@ -66,6 +96,34 @@ function isStopFlow(step: Step): boolean {
     step === "click-stop-confirm" ||
     step === "stop-working" ||
     step === "stop-done"
+  );
+}
+
+function isAskFlow(step: Step): boolean {
+  return (
+    step === "click-ask-item" ||
+    step === "ask-compose" ||
+    step === "ask-type" ||
+    step === "move-ask-send" ||
+    step === "click-ask-send" ||
+    step === "ask-thinking" ||
+    step === "ask-reply"
+  );
+}
+
+function askPhaseFor(step: Step): AskPhase {
+  if (step === "click-ask-item" || step === "ask-compose") return "compose";
+  if (step === "ask-type" || step === "move-ask-send") return "typing";
+  if (step === "click-ask-send") return "sent";
+  if (step === "ask-thinking") return "thinking";
+  return "reply";
+}
+
+function showEllipsisMenu(step: Step): boolean {
+  return (
+    step === "click-ask" ||
+    step === "ask-menu" ||
+    step === "move-ask-item"
   );
 }
 
@@ -137,14 +195,16 @@ export function AppDemo() {
     return () => window.removeEventListener("resize", onResize);
   }, [step, measure]);
 
-  const openOverlay =
-    step === "ask" || step === "click-ask"
-      ? "ask"
-      : step === "share" || step === "click-share"
-        ? "share"
-        : isStopFlow(step)
-          ? "stop"
-          : null;
+  const openOverlay = isAskFlow(step)
+    ? "ask"
+    : step === "share" || step === "click-share"
+      ? "share"
+      : isStopFlow(step)
+        ? "stop"
+        : null;
+
+  const menuOpen = showEllipsisMenu(step);
+  const askPhase = askPhaseFor(step);
 
   const stopPhase: "confirm" | "working" | "done" =
     step === "stop-working"
@@ -154,7 +214,12 @@ export function AppDemo() {
         : "confirm";
 
   const highlight =
-    step === "move-ask" || step === "click-ask" || step === "ask"
+    step === "move-ask" ||
+    step === "click-ask" ||
+    step === "ask-menu" ||
+    step === "move-ask-item" ||
+    step === "click-ask-item" ||
+    isAskFlow(step)
       ? "ask"
       : step === "move-share" || step === "click-share" || step === "share"
         ? "share"
@@ -170,13 +235,7 @@ export function AppDemo() {
 
   return (
     <div className="relative mx-auto w-full max-w-[420px]" aria-hidden>
-      <div className="absolute -inset-x-10 -bottom-8 top-20 -z-10 rounded-[50%] bg-ink/[0.18] blur-3xl" />
-
-      <div className="mb-2.5 flex justify-end pr-1">
-        <div className="inline-flex h-7 items-center rounded-md px-2 text-ink/70">
-          <AntennaIcon className="h-[15px] w-[15px]" />
-        </div>
-      </div>
+      <div className="absolute -inset-x-10 -bottom-8 top-16 -z-10 rounded-[50%] bg-ink/[0.18] blur-3xl" />
 
       <div
         ref={panelRef}
@@ -187,7 +246,9 @@ export function AppDemo() {
         }}
       >
         <div
-          className={`transition-opacity duration-500 ${openOverlay ? "opacity-25" : "opacity-100"}`}
+          className={`transition-opacity duration-500 ${
+            openOverlay || menuOpen ? "opacity-25" : "opacity-100"
+          }`}
         >
           <div className="flex items-center justify-between px-3 py-2">
             <span className="text-[13px] font-semibold tracking-[-0.01em]">Port Radar</span>
@@ -254,7 +315,8 @@ export function AppDemo() {
           className="pointer-events-none absolute left-1/2 top-[42%] h-1 w-1 -translate-x-1/2"
         />
 
-        {openOverlay === "ask" && <AskOverlay />}
+        {menuOpen && <EllipsisMenu />}
+        {openOverlay === "ask" && <AskOverlay phase={askPhase} />}
         {openOverlay === "share" && <ShareOverlay />}
         {openOverlay === "stop" && <StopOverlay phase={stopPhase} />}
 
@@ -276,8 +338,18 @@ function captionFor(step: Step): string {
   switch (step) {
     case "move-ask":
     case "click-ask":
-    case "ask":
+    case "ask-menu":
+    case "move-ask-item":
+    case "click-ask-item":
       return "Ask Apple Intelligence what a process is";
+    case "ask-compose":
+    case "ask-type":
+    case "move-ask-send":
+    case "click-ask-send":
+      return "Type anything about the process";
+    case "ask-thinking":
+    case "ask-reply":
+      return "Get an on-device answer — private to your Mac";
     case "move-share":
     case "click-share":
     case "share":
@@ -335,7 +407,71 @@ function Cursor({
   );
 }
 
-function AskOverlay() {
+function EllipsisMenu() {
+  const items = [
+    { label: "Ask about process", target: "ask-item" as const, emphasis: true },
+    { label: "Copy public URL", target: undefined, emphasis: false },
+    { label: "Manage tunnel", target: undefined, emphasis: false },
+    { label: "Stop sharing", target: undefined, emphasis: false },
+    { label: "Reveal in Finder", target: undefined, emphasis: false },
+    { label: "Open in Cursor", target: undefined, emphasis: false },
+    { label: "Open in Terminal", target: undefined, emphasis: false },
+  ];
+
+  return (
+    <div
+      className="demo-panel absolute z-[25] overflow-hidden rounded-[10px] border border-white/12 bg-[#2c2c2e] py-1 shadow-[0_18px_40px_rgba(0,0,0,0.55)]"
+      style={{ top: "26%", right: "12px", width: "200px" }}
+    >
+      {items.map((item, i) => (
+        <div key={item.label}>
+          {(i === 1 || i === 4) && <div className="my-1 h-px bg-white/10" />}
+          <div
+            data-demo-target={item.target}
+            className={`mx-1 rounded-[6px] px-2.5 py-[6px] text-[12.5px] transition-colors ${
+              item.emphasis
+                ? "bg-white/[0.1] font-medium text-white"
+                : "text-white/85"
+            }`}
+          >
+            {item.label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AskOverlay({ phase }: { phase: AskPhase }) {
+  const [typed, setTyped] = useState("");
+
+  useEffect(() => {
+    if (phase === "compose") {
+      setTyped("");
+      return;
+    }
+    if (phase !== "typing") {
+      setTyped(ASK_QUESTION);
+      return;
+    }
+    setTyped("");
+    let i = 0;
+    const id = window.setInterval(() => {
+      i += 1;
+      setTyped(ASK_QUESTION.slice(0, i));
+      if (i >= ASK_QUESTION.length) window.clearInterval(id);
+    }, 58);
+    return () => window.clearInterval(id);
+  }, [phase]);
+
+  const showUser =
+    phase === "sent" || phase === "thinking" || phase === "reply";
+  const showThinking = phase === "thinking";
+  const showReply = phase === "reply";
+  const draft = phase === "compose" || phase === "typing" ? typed : "";
+  const showCaret = phase === "compose" || phase === "typing";
+  const canSend = draft.length > 0;
+
   return (
     <div className="demo-panel absolute inset-3 z-20 flex flex-col overflow-hidden rounded-[12px] border border-white/14 bg-[#1c1c1e] shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
       <div className="flex items-start justify-between px-3 pb-2 pt-3">
@@ -348,19 +484,70 @@ function AskOverlay() {
         <span className="text-white/35">✕</span>
       </div>
       <div className="h-px bg-white/10" />
-      <div className="flex-1 space-y-2.5 overflow-hidden px-3 py-3">
-        <div className="demo-fade flex justify-end" style={{ animationDelay: "120ms" }}>
-          <div className="max-w-[88%] rounded-[10px] bg-[#0a84ff]/22 px-2.5 py-2 text-[12px] leading-snug text-white/95">
-            What is this and can I kill it?
+
+      <div className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-hidden px-3 py-3">
+        {!showUser && (
+          <p className="text-[11px] leading-relaxed text-white/35">
+            Ask anything — what it is, why it&apos;s running, if it&apos;s safe to kill…
+          </p>
+        )}
+
+        {showUser && (
+          <div className="demo-fade flex justify-end">
+            <div className="max-w-[88%] rounded-[10px] bg-[#0a84ff]/22 px-2.5 py-2 text-[12px] leading-snug text-white/95">
+              {ASK_QUESTION}
+            </div>
           </div>
-        </div>
-        <div className="demo-fade flex justify-start" style={{ animationDelay: "550ms" }}>
-          <div className="max-w-[94%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12px] leading-snug text-white/90">
-            Vite for <span className="font-mono text-[11px] text-teal-300">checkout-web</span>.
-            Safe to kill — restart with{" "}
-            <span className="font-mono text-[11px]">npm run dev</span>.
+        )}
+
+        {showThinking && (
+          <div className="flex items-center gap-2 text-[11px] text-white/45">
+            <span className="demo-spinner h-3 w-3 rounded-full border-2 border-white/20 border-t-white/80" />
+            Thinking…
           </div>
+        )}
+
+        {showReply && (
+          <div className="demo-fade flex justify-start">
+            <div className="max-w-[94%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12px] leading-snug text-white/90">
+              Vite for <span className="font-mono text-[11px] text-teal-300">checkout-web</span>.
+              Safe to kill — restart with{" "}
+              <span className="font-mono text-[11px]">npm run dev</span>.
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="h-px bg-white/10" />
+      <div className="flex items-end gap-2 px-3 py-2.5">
+        <div className="relative min-h-[22px] flex-1 text-[12px] leading-snug">
+          {draft ? (
+            <span className="text-white/90">
+              {draft}
+              {showCaret && (
+                <span className="demo-caret ml-px inline-block h-[13px] w-[1.5px] translate-y-[2px] bg-[#0a84ff]" />
+              )}
+            </span>
+          ) : (
+            <span className="text-white/30">
+              Ask about this process…
+              {phase === "compose" && (
+                <span className="demo-caret ml-px inline-block h-[13px] w-[1.5px] translate-y-[2px] bg-[#0a84ff]" />
+              )}
+            </span>
+          )}
         </div>
+        <span
+          data-demo-target="ask-send"
+          className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full transition ${
+            canSend ? "bg-[#0a84ff] text-white" : "bg-white/10 text-white/30"
+          }`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round">
+            <path d="M12 19V5" />
+            <path d="M6 11l6-6 6 6" />
+          </svg>
+        </span>
       </div>
     </div>
   );
@@ -603,17 +790,6 @@ function FooterItem({
       <span className={active ? "font-medium text-white" : ""}>{label}</span>
       {trailing && <span className="ml-auto text-[11px] text-white/35">{trailing}</span>}
     </div>
-  );
-}
-
-function AntennaIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <path d="M4.5 14.5a8 8 0 0 1 15 0" />
-      <path d="M7.5 17a4.5 4.5 0 0 1 9 0" />
-      <circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none" />
-      <path d="M12 4v8" />
-    </svg>
   );
 }
 
