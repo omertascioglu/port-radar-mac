@@ -18,6 +18,9 @@ final class Preferences {
         static let askAboutProcess = "askAboutProcessEnabled"
     }
 
+    /// Suppresses SMAppService writes while syncing from system status.
+    private var suppressLaunchAtLoginWrite = false
+
     /// Default matches the scanner's original interval.
     var pollingIntervalSeconds: Double {
         didSet { UserDefaults.standard.set(pollingIntervalSeconds, forKey: Key.pollingInterval) }
@@ -32,6 +35,24 @@ final class Preferences {
     var hideSystemProcesses: Bool {
         didSet { UserDefaults.standard.set(hideSystemProcesses, forKey: Key.hideSystem) }
     }
+
+    /// Launch Port Radar when the user logs in. Backed by `SMAppService`, not UserDefaults.
+    var launchAtLogin: Bool {
+        didSet {
+            guard !suppressLaunchAtLoginWrite else { return }
+            if let message = LaunchAtLogin.setEnabled(launchAtLogin) {
+                suppressLaunchAtLoginWrite = true
+                launchAtLogin = LaunchAtLogin.isEnabled
+                suppressLaunchAtLoginWrite = false
+                launchAtLoginError = message
+            } else {
+                launchAtLoginError = nil
+            }
+        }
+    }
+
+    /// Last error from enabling/disabling launch at login, if any.
+    var launchAtLoginError: String?
 
     var portRangeMin: Int {
         didSet { UserDefaults.standard.set(portRangeMin, forKey: Key.portMin) }
@@ -98,6 +119,18 @@ final class Preferences {
         } else {
             preferredIDEBundleID = IDEDetector.preferredDefault()?.bundleIdentifier ?? ""
         }
+
+        suppressLaunchAtLoginWrite = true
+        launchAtLogin = LaunchAtLogin.isEnabled
+        suppressLaunchAtLoginWrite = false
+        launchAtLoginError = nil
+    }
+
+    /// Re-read Login Items status (e.g. after user changes it in System Settings).
+    func refreshLaunchAtLogin() {
+        suppressLaunchAtLoginWrite = true
+        launchAtLogin = LaunchAtLogin.isEnabled
+        suppressLaunchAtLoginWrite = false
     }
 
     func matchesFilters(_ server: DevServer) -> Bool {

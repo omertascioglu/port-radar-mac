@@ -28,6 +28,15 @@ struct SettingsModal: View {
                 }
 
                 settingsGroup {
+                    settingsRow("Launch at login") {
+                        Toggle("", isOn: $preferences.launchAtLogin)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+                }
+
+                settingsGroup {
                     settingsRow("Notify on new port") {
                         Toggle("", isOn: $preferences.notificationsEnabled)
                             .labelsHidden()
@@ -52,6 +61,15 @@ struct SettingsModal: View {
                             .toggleStyle(.switch)
                             .controlSize(.small)
                     }
+                }
+
+                if let launchError = preferences.launchAtLoginError {
+                    Text(launchError)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
                 }
 
                 settingsGroup {
@@ -112,6 +130,7 @@ struct SettingsModal: View {
                 }
             }
             .padding(.horizontal, 16)
+            .onAppear { preferences.refreshLaunchAtLogin() }
 
             Divider()
                 .padding(.top, 16)
