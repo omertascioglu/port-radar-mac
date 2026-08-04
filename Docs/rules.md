@@ -18,8 +18,9 @@ If something conflicts, **plan.md** defines product/tech intent; **tasks.md** de
 
 ## Project layout
 
-- **App lives in the repo root** — same level as `docs/`. Do not create a nested app folder (e.g. no `mobile/` or `app-root/` wrapper).
-- **`docs/`** holds planning and process docs only (`plan.md`, `tasks.md`, `rules.md`).
+- **Monorepo** — `apps/mac/` is the native Port Radar menu-bar app; `apps/web/` is the Next.js landing. Keep those stacks separate (no shared build that forces Node onto Swift or vice versa).
+- **`Docs/`** holds planning and process docs only (`plan.md`, `tasks.md`, `rules.md`), at the repo root.
+- Root `Makefile` may delegate to `apps/mac` for convenience (`make run`).
 
 ---
 
@@ -61,7 +62,7 @@ Defaults for new projects unless `plan.md` overrides.
 
 - **Language/UI** — Swift + SwiftUI. Menu-bar apps use `MenuBarExtra` (macOS 13+).
 - **No Xcode UI** — All development happens in the editor/IDE of choice, never in Xcode. Xcode is installed only for its toolchain (Swift compiler, macOS SDK, `codesign`). Never create or open an `.xcodeproj`.
-- **Project format** — Swift Package Manager (`Package.swift`). Build with `swift build`; run via the bundle script.
+- **Project format** — Swift Package Manager (`Package.swift` in `apps/mac`). Build with `swift build`; run via the bundle script.
 - **App bundle** — A `Makefile` assembles the `.app` bundle (`Info.plist`, ad-hoc codesign). Required for notifications and hiding the Dock icon (`LSUIElement`).
 - **Dependencies** — Apple frameworks first (AppKit, SwiftUI, UserNotifications). Add SPM dependencies only when clearly needed.
 - **Icons** — SF Symbols for all UI icons (native equivalent of the Lucide rule); no emoji as interface icons.

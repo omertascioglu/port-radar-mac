@@ -1,4 +1,16 @@
+# Shared
+.DS_Store
+
+# Mac app (apps/mac)
+apps/mac/.build/
+apps/mac/DevPort.app/
+apps/mac/Port Radar.app/
 .build/
 DevPort.app/
 Port Radar.app/
-.DS_Store
+
+# Web (apps/web)
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.env*.local

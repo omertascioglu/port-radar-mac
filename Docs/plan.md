@@ -16,7 +16,7 @@ Developers constantly leave dev servers running — Vite on 5173, Next.js on 300
 
 - **Language/UI** — Swift + SwiftUI, `MenuBarExtra`; deployment target macOS 14+ (the `@Observable` state macro requires it)
 - **Project format** — Swift Package Manager (`Package.swift`); no `.xcodeproj`, no Xcode UI
-- **Build/run** — `swift build` + a `Makefile` bundle script that assembles and ad-hoc signs `DevPort.app`
+- **Build/run** — from `apps/mac`: `swift build` + a `Makefile` that assembles and ad-hoc signs `Port Radar.app` (repo root `make run` delegates here)
 - **Dependencies** — Apple frameworks only (AppKit, SwiftUI, UserNotifications); zero third-party packages unless clearly needed
 - **Icons** — SF Symbols
 - **Storage** — `UserDefaults` for preferences
@@ -28,9 +28,9 @@ Developers constantly leave dev servers running — Vite on 5173, Next.js on 300
 
 Xcode is installed only for its toolchain (Swift compiler, macOS SDK, `codesign`). All editing happens in Cursor; all building happens in the terminal.
 
-- `swift build` — compile
-- `make bundle` — arrange the binary into `DevPort.app` (`Contents/MacOS/DevPort` + `Info.plist`), ad-hoc codesign
-- `make run` — bundle + launch
+- `swift build` — compile (run inside `apps/mac`)
+- `make bundle` — arrange the binary into `Port Radar.app` (`Contents/MacOS/DevPort` + `Info.plist`), ad-hoc codesign
+- `make run` — bundle + launch (works from `apps/mac` or repo root)
 
 The `.app` bundle (not a bare binary) is required for two features: user notifications (`UNUserNotificationCenter` needs a bundle identifier) and `LSUIElement` (hides the Dock icon so the app is menu-bar only).
 
@@ -81,7 +81,7 @@ Clean, native look; SF Symbols throughout; no emoji as icons.
 
 ## 7. Distribution
 
-- **Now** — local only: `make run`, or keep `DevPort.app` in `/Applications`. Ad-hoc signed, no Apple account needed.
+- **Now** — local only: `make run` from repo root or `apps/mac`, or keep `Port Radar.app` in `/Applications`. Ad-hoc signed, no Apple account needed.
 - **Later (optional)** — Developer ID + notarization to share outside the App Store (extra signing flags in the bundle script; requires paid Apple Developer account).
 - **App Store — not possible for this app.** The App Store mandates App Sandbox, which forbids inspecting or signaling other processes — DevPort's core function. This is a platform rule, not a tooling choice.
 
