@@ -49,5 +49,6 @@ final class AppState {
         }
         servers = updated.sorted { $0.port < $1.port }
         readyForNotifications = true
+        TunnelManager.shared.prune(activePorts: Set(servers.map(\.port)))
     }
 }

@@ -30,6 +30,10 @@ struct ContentView: View {
     @State private var showQuitConfirm = false
     @State private var showSettings = false
     @State private var agentServer: DevServer?
+    @State private var showTunnels = false
+    @State private var tunnelsFocusPort: Int?
+
+    private var tunnels = TunnelManager.shared
 
     private var visibleServers: [DevServer] {
         state.servers.filter { preferences.matchesFilters($0) }
@@ -84,7 +88,7 @@ struct ContentView: View {
     }
 
     private var isModalPresented: Bool {
-        killPrompt != nil || showQuitConfirm || showSettings || agentServer != nil
+        killPrompt != nil || showQuitConfirm || showSettings || agentServer != nil || showTunnels
     }
 
     var body: some View {
@@ -138,6 +142,15 @@ struct ContentView: View {
                     }
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if showTunnels {
+                TunnelsModal(
+                    focusPort: tunnelsFocusPort,
+                    onDismiss: {
+                        showTunnels = false
+                        tunnelsFocusPort = nil
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .frame(width: 380)
@@ -145,6 +158,7 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.15), value: showQuitConfirm)
         .animation(.easeOut(duration: 0.15), value: showSettings)
         .animation(.easeOut(duration: 0.15), value: agentServer?.id)
+        .animation(.easeOut(duration: 0.15), value: showTunnels)
     }
 
     private func runKill(_ prompt: KillPrompt) async {
@@ -195,6 +209,17 @@ struct ContentView: View {
                                 guard !isModalPresented else { return }
                                 agentServer = server
                             },
+                            onShareTunnel: {
+                                guard !isModalPresented else { return }
+                                tunnels.startShare(port: server.port, processName: server.processName)
+                                tunnelsFocusPort = server.port
+                                showTunnels = true
+                            },
+                            onManageTunnels: {
+                                guard !isModalPresented else { return }
+                                tunnelsFocusPort = server.port
+                                showTunnels = true
+                            },
                             onKill: { force in
                                 guard !isModalPresented else { return }
                                 killPhase = .confirm
@@ -215,6 +240,28 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
+            Button {
+                guard !isModalPresented else { return }
+                tunnelsFocusPort = nil
+                showTunnels = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "network")
+                    Text("Tunnels")
+                    Spacer()
+                    if tunnels.activeCount > 0 {
+                        Text("\(tunnels.activeCount)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            Divider()
+
             Button {
                 guard !isModalPresented else { return }
                 showSettings = true
@@ -496,15 +543,18 @@ struct GroupHeader: View {
 struct ServerRow: View {
     let server: DevServer
     let onAskAgent: () -> Void
+    let onShareTunnel: () -> Void
+    let onManageTunnels: () -> Void
     let onKill: (_ force: Bool) -> Void
 
     private var preferences: Preferences { Preferences.shared }
+    private var tunnels: TunnelManager { TunnelManager.shared }
     private var editorName: String { preferences.preferredIDEName }
     private var folderPath: String? {
         server.project?.rootPath ?? server.workingDirectory
     }
     private var showAsk: Bool { preferences.askAboutProcessEnabled }
-    private var hasMenuActions: Bool { showAsk || folderPath != nil }
+    private var hasMenuActions: Bool { true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -515,6 +565,15 @@ struct ServerRow: View {
                     .help(server.isOrphaned ? "Possibly orphaned — parent process is gone" : "Listening")
                 Text(server.processName)
                     .font(.system(.body, weight: .medium))
+                if tunnels.isShared(server.port) {
+                    Text("Shared")
+                        .font(.caption2)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.cyan.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.cyan)
+                        .help("Public Cloudflare tunnel is active for this port")
+                }
                 if server.isOrphaned {
                     Text("Orphan")
                         .font(.caption2)
@@ -579,8 +638,22 @@ struct ServerRow: View {
                 if showAsk {
                     Button("Ask about process") { onAskAgent() }
                 }
-                if let path = folderPath {
+                if tunnels.isShared(server.port) {
                     if showAsk { Divider() }
+                    Button("Copy public URL") {
+                        TunnelManager.shared.copyURL(for: server.port)
+                    }
+                    .disabled(TunnelManager.shared.tunnel(for: server.port)?.publicURL == nil)
+                    Button("Manage tunnel") { onManageTunnels() }
+                    Button("Stop sharing") {
+                        TunnelManager.shared.stopShare(port: server.port)
+                    }
+                } else {
+                    if showAsk { Divider() }
+                    Button("Share via Cloudflare") { onShareTunnel() }
+                }
+                if let path = folderPath {
+                    Divider()
                     Button("Reveal in Finder") { OpenActions.revealInFinder(path) }
                     Button("Open in \(editorName)") {
                         OpenActions.openInEditor(path)
