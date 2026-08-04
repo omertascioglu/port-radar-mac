@@ -10,7 +10,7 @@ Native macOS menu-bar app that finds localhost listeners — plus a marketing si
 
 ```
 apps/mac/     Native SwiftUI menu-bar app (Port Radar)
-apps/web/     Next.js landing (coming soon)
+apps/web/     Next.js landing
 Docs/         Product plan, tasks, rules
 ```
 
@@ -34,7 +34,12 @@ Details: [`apps/mac/README.md`](apps/mac/README.md)
 
 ## Web landing
 
-Scaffold the Next.js site in [`apps/web/`](apps/web/) when ready.
+```bash
+cd apps/web
+npm run dev
+```
+
+Details: [`apps/web/README.md`](apps/web/README.md)
 
 ## Docs
 
