@@ -36,22 +36,22 @@ function Atmosphere() {
 function Nav() {
   return (
     <nav className="mx-auto flex w-full max-w-[1120px] items-center justify-between px-6 pt-7 md:px-10">
-      <a href="#top" className="flex items-center gap-2.5">
+      <a href="#top" className="flex items-center gap-3">
         <Image
           src="/brand/app-icon.png"
           alt=""
-          width={28}
-          height={28}
-          className="h-7 w-7"
+          width={48}
+          height={48}
+          className="h-12 w-12"
           priority
         />
-        <span className="font-display text-[15px] font-semibold tracking-[-0.03em] text-ink">
+        <span className="font-display text-[26px] font-semibold leading-none tracking-[-0.035em] text-ink">
           Port Radar
         </span>
       </a>
       <a
         href={site.downloadUrl}
-        className="download-cta-sm inline-flex h-9 items-center rounded-[10px] px-4 text-[13px] font-semibold"
+        className="download-cta-sm inline-flex h-10 items-center self-center rounded-[11px] px-4 text-[14px] font-semibold"
       >
         Download
       </a>
@@ -467,9 +467,9 @@ function Download() {
         <Image
           src="/brand/app-icon.png"
           alt=""
-          width={64}
-          height={64}
-          className="mb-8 h-14 w-14"
+          width={112}
+          height={112}
+          className="mb-8 h-28 w-28"
         />
         <h2 className="font-display text-[clamp(1.9rem,3.5vw,2.8rem)] font-semibold tracking-[-0.04em] text-ink">
           Stop guessing what&apos;s listening.
@@ -504,8 +504,8 @@ function Footer() {
     <footer className="border-t border-line">
       <div className="mx-auto flex max-w-[1120px] flex-col gap-2 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
         <div className="flex items-center gap-2">
-          <Image src="/brand/app-icon.png" alt="" width={18} height={18} className="h-[18px] w-[18px]" />
-          <span className="font-display text-[13px] font-semibold tracking-tight text-ink">
+          <Image src="/brand/app-icon.png" alt="" width={32} height={32} className="h-8 w-8" />
+          <span className="font-display text-[18px] font-semibold leading-none tracking-tight text-ink">
             Port Radar
           </span>
         </div>
