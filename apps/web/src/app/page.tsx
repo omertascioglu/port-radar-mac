@@ -50,13 +50,57 @@ function Nav() {
           Port Radar
         </span>
       </a>
-      <a
-        href={site.downloadUrl}
-        className="download-cta-sm inline-flex h-10 items-center self-center rounded-[11px] px-4 text-[14px] font-semibold"
-      >
-        Download
-      </a>
+      <div className="flex items-center gap-2">
+        <a
+          href={site.githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Port Radar on GitHub"
+          className="inline-flex h-10 items-center gap-2 rounded-[11px] border border-line bg-white/60 px-3.5 text-[14px] font-semibold text-ink/75 transition-colors hover:border-ink/20 hover:bg-white hover:text-ink"
+        >
+          <GitHubIcon />
+          <span className="hidden sm:inline">Star on GitHub</span>
+        </a>
+        <a
+          href={site.downloadUrl}
+          className="download-cta-sm inline-flex h-10 items-center self-center rounded-[11px] px-4 text-[14px] font-semibold"
+        >
+          Download
+        </a>
+      </div>
     </nav>
+  );
+}
+
+/**
+ * Product Hunt's featured badge. Served as a remote SVG from their widget API,
+ * so it stays a plain <img> rather than going through next/image.
+ */
+function ProductHuntBadge() {
+  return (
+    <a
+      href={site.productHuntUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex transition-opacity hover:opacity-80"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={site.productHuntBadge}
+        alt={`${site.name} — featured on Product Hunt`}
+        width={250}
+        height={54}
+        className="h-12 w-auto"
+      />
+    </a>
+  );
+}
+
+function GitHubIcon({ size = 17 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-2.91-.88-2.91-2.79 0-.81.29-1.48.77-2-.08-.2-.34-1 .07-2.08 0 0 .62-.2 2.03.76a6.8 6.8 0 0 1 1.85-.25c.63 0 1.26.08 1.85.25 1.41-.96 2.03-.76 2.03-.76.41 1.08.15 1.88.07 2.08.48.52.77 1.19.77 2 0 1.92-1.14 2.59-2.92 2.79.3.26.56.76.56 1.54 0 1.11-.01 2.01-.01 2.29 0 .21.15.46.55.38A7.99 7.99 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
   );
 }
 
@@ -99,7 +143,7 @@ function Hero() {
             </span>
           </a>
           <p className="text-[12px] font-medium text-faint">
-            Free · Apple Intelligence · on-device
+            Free &amp; open source · Apple Intelligence · on-device
           </p>
         </div>
       </div>
@@ -500,14 +544,23 @@ function Download() {
           aren&apos;t notarized yet. Open System Settings → Privacy &amp; Security and click{" "}
           <span className="font-medium text-ink">Open Anyway</span>. Once only.
         </p>
-        <a
-          href={site.githubUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-5 text-[13px] font-medium text-muted underline decoration-line underline-offset-4 hover:text-ink"
-        >
-          View source
-        </a>
+        <div className="mt-8 flex flex-col items-center">
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <a
+              href={site.githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-12 items-center gap-2.5 rounded-[14px] border border-line bg-white/70 px-6 text-[14.5px] font-semibold text-ink/80 transition-colors hover:border-ink/20 hover:bg-white hover:text-ink"
+            >
+              <GitHubIcon size={18} />
+              View source on GitHub
+            </a>
+            <ProductHuntBadge />
+          </div>
+          <p className="mt-4 text-[12px] font-light text-faint">
+            Open source under Apache 2.0
+          </p>
+        </div>
       </Reveal>
     </section>
   );
@@ -516,16 +569,54 @@ function Download() {
 function Footer() {
   return (
     <footer className="border-t border-line">
-      <div className="mx-auto flex max-w-[1120px] flex-col gap-2 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
+      <div className="mx-auto flex max-w-[1120px] flex-col gap-6 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
         <div className="flex items-center gap-2">
           <Image src="/brand/app-icon.png" alt="" width={32} height={32} className="h-8 w-8" />
           <span className="font-display text-[18px] font-semibold leading-none tracking-tight text-ink">
             Port Radar
           </span>
         </div>
-        <p className="text-[11px] font-light text-faint">
-          Native macOS utility. Not affiliated with Apple or Cloudflare.
-        </p>
+
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex items-center gap-4 text-[12.5px] font-medium text-muted">
+            <a
+              href={site.githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
+            >
+              <GitHubIcon size={15} />
+              GitHub
+            </a>
+            <a
+              href={`${site.githubUrl}/blob/main/LICENSE`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              Apache 2.0
+            </a>
+            <a
+              href={`${site.githubUrl}/releases/latest`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              Releases
+            </a>
+            <a
+              href={site.productHuntUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              Product Hunt
+            </a>
+          </div>
+          <p className="text-[11px] font-light text-faint sm:text-right">
+            Open source native macOS development utility.
+          </p>
+        </div>
       </div>
     </footer>
   );
