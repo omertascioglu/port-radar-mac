@@ -41,7 +41,7 @@ type TargetId =
   | "stop-confirm"
   | "rest";
 
-type AskPhase = "compose" | "typing" | "sent" | "thinking" | "reply";
+export type AskPhase = "compose" | "typing" | "sent" | "thinking" | "reply";
 
 const ASK_QUESTION = "What is this — can I stop it?";
 
@@ -245,70 +245,15 @@ export function AppDemo() {
             "linear-gradient(180deg, rgba(44,44,46,0.96) 0%, rgba(28,28,30,0.98) 100%)",
         }}
       >
-        <div
-          className={`transition-opacity duration-500 ${
-            openOverlay || menuOpen ? "opacity-25" : "opacity-100"
-          }`}
-        >
-          <div className="flex items-center justify-between px-3 py-2">
-            <span className="text-[13px] font-semibold tracking-[-0.01em]">Port Radar</span>
-            <span className="text-[11px] text-white/40">{listening} listening</span>
-          </div>
-          <div className="h-px bg-white/[0.1]" />
-
-          <div className="pb-1">
-            <GroupHeader framework="next" name="checkout-web" path="~/dev/checkout-web" />
-            <ServerRow name="node" pid="48201" command="next dev" port="3000" uptime="2h 14m" />
-            {showVite && (
-              <div
-                className={`origin-top transition-all duration-700 ease-out ${
-                  viteFading ? "opacity-35" : "opacity-100"
-                } ${removing ? "-mt-1 max-h-0 overflow-hidden py-0 opacity-0" : "max-h-20"}`}
-              >
-                <ServerRow
-                  name="node"
-                  pid="48244"
-                  command="vite"
-                  port="5173"
-                  uptime="2h 14m"
-                  shared={step !== "stop-working" && !removing}
-                  highlight={highlight === "ask" || highlight === "stop" ? highlight : null}
-                  demoRow
-                />
-              </div>
-            )}
-            <GroupHeader framework="python" name="api" path="~/dev/api" />
-            <ServerRow
-              name="Python"
-              pid="39112"
-              command="uvicorn main:app --reload"
-              port="8000"
-              uptime="6h 02m"
-            />
-            <GroupHeader name="Other" />
-            <ServerRow
-              name="Python"
-              pid="12884"
-              command="/usr/bin/python3 -m http.server 8128"
-              port="8128"
-              uptime="14h 01m"
-              orphan
-            />
-          </div>
-
-          <div className="h-px bg-white/[0.1]" />
-          <FooterItem
-            icon="network"
-            label="Tunnels"
-            trailing={listening === 4 ? "1" : undefined}
-            demoTarget="share"
-            active={highlight === "share"}
-          />
-          <div className="h-px bg-white/[0.1]" />
-          <FooterItem icon="gear" label="Settings" />
-          <div className="h-px bg-white/[0.1]" />
-          <FooterItem icon="power" label="Quit Port Radar" />
-        </div>
+        <PanelBody
+          dimmed={Boolean(openOverlay || menuOpen)}
+          listening={listening}
+          showVite={showVite}
+          viteFading={viteFading}
+          removing={removing}
+          viteShared={step !== "stop-working" && !removing}
+          highlight={highlight}
+        />
 
         <span
           data-demo-target="rest"
@@ -330,6 +275,92 @@ export function AppDemo() {
           {captionFor(step)}
         </p>
       )}
+    </div>
+  );
+}
+
+/** Panel contents — shared by the animated demo and the static press stills. */
+export function PanelBody({
+  dimmed,
+  listening,
+  showVite,
+  viteFading,
+  removing,
+  viteShared,
+  highlight,
+}: {
+  dimmed: boolean;
+  listening: number;
+  showVite: boolean;
+  viteFading: boolean;
+  removing: boolean;
+  viteShared: boolean;
+  highlight: "ask" | "share" | "stop" | null;
+}) {
+  return (
+    <div
+      className={`transition-opacity duration-500 ${
+        dimmed ? "opacity-25" : "opacity-100"
+      }`}
+    >
+      <div className="flex items-center justify-between px-3 py-2">
+        <span className="text-[13px] font-semibold tracking-[-0.01em]">Port Radar</span>
+        <span className="text-[11px] text-white/40">{listening} listening</span>
+      </div>
+      <div className="h-px bg-white/[0.1]" />
+
+      <div className="pb-1">
+        <GroupHeader framework="next" name="checkout-web" path="~/dev/checkout-web" />
+        <ServerRow name="node" pid="48201" command="next dev" port="3000" uptime="2h 14m" />
+        {showVite && (
+          <div
+            className={`origin-top transition-all duration-700 ease-out ${
+              viteFading ? "opacity-35" : "opacity-100"
+            } ${removing ? "-mt-1 max-h-0 overflow-hidden py-0 opacity-0" : "max-h-20"}`}
+          >
+            <ServerRow
+              name="node"
+              pid="48244"
+              command="vite"
+              port="5173"
+              uptime="2h 14m"
+              shared={viteShared}
+              highlight={highlight === "ask" || highlight === "stop" ? highlight : null}
+              demoRow
+            />
+          </div>
+        )}
+        <GroupHeader framework="python" name="api" path="~/dev/api" />
+        <ServerRow
+          name="Python"
+          pid="39112"
+          command="uvicorn main:app --reload"
+          port="8000"
+          uptime="6h 02m"
+        />
+        <GroupHeader name="Other" />
+        <ServerRow
+          name="Python"
+          pid="12884"
+          command="/usr/bin/python3 -m http.server 8128"
+          port="8128"
+          uptime="14h 01m"
+          orphan
+        />
+      </div>
+
+      <div className="h-px bg-white/[0.1]" />
+      <FooterItem
+        icon="network"
+        label="Tunnels"
+        trailing={listening === 4 ? "1" : undefined}
+        demoTarget="share"
+        active={highlight === "share"}
+      />
+      <div className="h-px bg-white/[0.1]" />
+      <FooterItem icon="gear" label="Settings" />
+      <div className="h-px bg-white/[0.1]" />
+      <FooterItem icon="power" label="Quit Port Radar" />
     </div>
   );
 }
@@ -407,7 +438,7 @@ function Cursor({
   );
 }
 
-function EllipsisMenu() {
+export function EllipsisMenu() {
   const items = [
     { label: "Ask about process", target: "ask-item" as const, emphasis: true },
     { label: "Copy public URL", target: undefined, emphasis: false },
@@ -442,7 +473,7 @@ function EllipsisMenu() {
   );
 }
 
-function AskOverlay({ phase }: { phase: AskPhase }) {
+export function AskOverlay({ phase }: { phase: AskPhase }) {
   const [typed, setTyped] = useState("");
 
   useEffect(() => {
@@ -553,7 +584,7 @@ function AskOverlay({ phase }: { phase: AskPhase }) {
   );
 }
 
-function ShareOverlay() {
+export function ShareOverlay() {
   return (
     <div className="demo-panel absolute inset-3 z-20 overflow-hidden rounded-[12px] border border-white/14 bg-[#1c1c1e] shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
       <div className="flex items-start justify-between px-3 pb-2 pt-3">
@@ -591,7 +622,7 @@ function ShareOverlay() {
   );
 }
 
-function StopOverlay({ phase }: { phase: "confirm" | "working" | "done" }) {
+export function StopOverlay({ phase }: { phase: "confirm" | "working" | "done" }) {
   return (
     <div className="demo-panel absolute inset-x-5 inset-y-auto top-[28%] z-20 overflow-hidden rounded-[12px] border border-white/14 bg-[#2c2c2e] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
       <p className="text-[14px] font-semibold text-white">Stop node?</p>
