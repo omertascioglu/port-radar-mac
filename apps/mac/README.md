@@ -13,11 +13,10 @@ Swift + SwiftUI (`MenuBarExtra`), macOS 14+. No Xcode project: built with Swift 
 From this directory (`apps/mac`):
 
 ```bash
-make run      # build, assemble Port Radar.app, sign (ad-hoc), launch
+make run      # build, assemble Port Radar.app, launch
 make build    # compile only (swift build -c release)
-make bundle   # build + assemble/sign Port Radar.app without launching
+make bundle   # build + assemble Port Radar.app without launching
 make dmg      # package a drag-to-Applications installer into dist/
-make verify   # show the signature and Gatekeeper's verdict
 make clean    # remove .build/, Port Radar.app, dist/
 ```
 
@@ -58,15 +57,8 @@ Support/Info.plist  bundle config (LSUIElement, bundle id)
 
 ## Distribution
 
-`make dmg` builds an installer, but by default it's ad-hoc signed — fine locally, blocked by
-Gatekeeper on every other Mac. A download that opens cleanly needs Developer ID signing plus
-notarization ($99/year Apple Developer Program):
+Shipped as a DMG on [Releases](https://github.com/juansebsol/port-radar-mac/releases/latest).
+`make dmg` produces the same installer locally.
 
-```bash
-make notarize DEVELOPER_ID="Developer ID Application: Name (TEAMID)" NOTARY_PROFILE=port-radar
-```
-
-Full walkthrough, including what users see when it *isn't* notarized: [`Docs/DISTRIBUTION.md`](../../Docs/DISTRIBUTION.md).
-
-App Store distribution is not possible: the mandatory App Sandbox forbids inspecting or
-signaling other processes, which is this app's core function.
+Not on the Mac App Store: the mandatory App Sandbox forbids inspecting or signaling other
+processes, which is this app's core function.

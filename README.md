@@ -24,10 +24,8 @@ macOS 14+. Ask requires Apple Intelligence (macOS 26+ on a supported Mac).
 
 ## Download
 
-Grab the latest DMG from [Releases](https://github.com/juansebsol/port-radar-mac/releases/latest).
-
-macOS blocks the first launch because the app isn't notarized yet — open **System Settings →
-Privacy & Security** and click **Open Anyway**. Once only.
+Grab the latest DMG from [Releases](https://github.com/juansebsol/port-radar-mac/releases/latest),
+open it, and drag Port Radar to Applications. First-launch instructions are on the release page.
 
 ## Build from source
 

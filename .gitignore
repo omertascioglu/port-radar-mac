@@ -3,9 +3,7 @@
 
 # Local-only — launch copy and working notes, not part of the public repo
 content/
-Docs/plan.md
-Docs/tasks.md
-Docs/rules.md
+Docs/
 
 # Mac app (apps/mac)
 apps/mac/.build/
