@@ -59,3 +59,11 @@ apps/web/     Next.js landing page
 
 More detail in [`apps/mac/README.md`](apps/mac/README.md) and
 [`apps/web/README.md`](apps/web/README.md).
+
+## License
+
+[Apache License 2.0](LICENSE) — free to use, modify, and distribute, including commercially.
+If you redistribute Port Radar or build on it, keep the copyright notice and ship a copy of
+[`NOTICE`](NOTICE) with it, and mark any files you changed.
+
+Copyright 2026 Juan Sebastian Solano.
