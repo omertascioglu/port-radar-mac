@@ -16,7 +16,9 @@ From this directory (`apps/mac`):
 make run      # build, assemble Port Radar.app, sign (ad-hoc), launch
 make build    # compile only (swift build -c release)
 make bundle   # build + assemble/sign Port Radar.app without launching
-make clean    # remove .build/ and Port Radar.app
+make dmg      # package a drag-to-Applications installer into dist/
+make verify   # show the signature and Gatekeeper's verdict
+make clean    # remove .build/, Port Radar.app, dist/
 ```
 
 Or from the repo root: `make run` (delegates here).
@@ -56,4 +58,15 @@ Support/Info.plist  bundle config (LSUIElement, bundle id)
 
 ## Distribution
 
-Local-only for now (ad-hoc signed). Sharing outside the machine requires Developer ID signing + notarization. App Store distribution is not possible: the mandatory App Sandbox forbids inspecting or signaling other processes, which is this app's core function.
+`make dmg` builds an installer, but by default it's ad-hoc signed — fine locally, blocked by
+Gatekeeper on every other Mac. A download that opens cleanly needs Developer ID signing plus
+notarization ($99/year Apple Developer Program):
+
+```bash
+make notarize DEVELOPER_ID="Developer ID Application: Name (TEAMID)" NOTARY_PROFILE=port-radar
+```
+
+Full walkthrough, including what users see when it *isn't* notarized: [`Docs/DISTRIBUTION.md`](../../Docs/DISTRIBUTION.md).
+
+App Store distribution is not possible: the mandatory App Sandbox forbids inspecting or
+signaling other processes, which is this app's core function.

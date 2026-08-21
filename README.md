@@ -2,45 +2,62 @@
   <img src="apps/mac/Support/AppIcon.png" alt="Port Radar" width="128" height="128">
 </p>
 
-# Port Radar
+<h1 align="center">Port Radar</h1>
 
-Native macOS menu-bar app that finds localhost listeners — plus a marketing site in the same repo.
+<p align="center">
+  The AI port manager for Mac. Every port your Mac is running — named, explained, stopped in one click.
+</p>
+
+---
+
+Port Radar is a native macOS menu-bar app that lists every process listening on localhost,
+grouped by project. Ask Apple Intelligence what any of them is and whether it's safe to stop —
+on-device, so nothing leaves your Mac. Share any local app as a live public URL with a
+one-click Cloudflare tunnel.
+
+- **Scan** — every listening TCP port, refreshed continuously, grouped by project
+- **Ask** — on-device Apple Intelligence explains a process from its command, path, and uptime
+- **Stop** — graceful SIGTERM with escalation, or force quit, always confirmed
+- **Share** — one-click Cloudflare quick tunnel, no account or CLI setup
+
+macOS 14+. Ask requires Apple Intelligence (macOS 26+ on a supported Mac).
+
+## Download
+
+Grab the latest DMG from [Releases](https://github.com/juansebsol/port-radar-mac/releases/latest).
+
+macOS blocks the first launch because the app isn't notarized yet — open **System Settings →
+Privacy & Security** and click **Open Anyway**. Once only.
+
+## Build from source
+
+No third-party dependencies; you need the Swift toolchain that ships with Xcode.
+
+```bash
+make run      # build, assemble Port Radar.app, launch
+make build    # compile only
+make bundle   # build + assemble without launching
+make dmg      # package a drag-to-Applications installer
+make clean
+```
+
+## How it works
+
+- Polls `lsof -iTCP -sTCP:LISTEN -P -n` and diffs snapshots of `(port, pid)`
+- Enriches each PID via native APIs: `proc_pidpath`, `KERN_PROCARGS2`, `kinfo_proc`,
+  `PROC_PIDVNODEPATHINFO`
+- Never runs as root — it only sees and signals processes owned by the current user, which is
+  exactly where dev servers live
+
+Not on the Mac App Store: the mandatory App Sandbox forbids inspecting or signaling other
+processes, which is the entire point of the app.
 
 ## Repo layout
 
 ```
-apps/mac/     Native SwiftUI menu-bar app (Port Radar)
-apps/web/     Next.js landing
-Docs/         Product plan, tasks, rules
+apps/mac/     Native SwiftUI menu-bar app
+apps/web/     Next.js landing page
 ```
 
-## Mac app
-
-```bash
-cd apps/mac
-make run      # build, assemble Port Radar.app, launch
-make build    # compile only
-make bundle   # build + assemble without launching
-make clean
-```
-
-From the repo root you can also run:
-
-```bash
-make run
-```
-
-Details: [`apps/mac/README.md`](apps/mac/README.md)
-
-## Web landing
-
-```bash
-cd apps/web
-npm run dev
-```
-
-Details: [`apps/web/README.md`](apps/web/README.md)
-
-## Docs
-
-[`Docs/plan.md`](Docs/plan.md) · [`Docs/tasks.md`](Docs/tasks.md) · [`Docs/rules.md`](Docs/rules.md)
+More detail in [`apps/mac/README.md`](apps/mac/README.md) and
+[`apps/web/README.md`](apps/web/README.md).

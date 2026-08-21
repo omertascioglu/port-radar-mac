@@ -495,11 +495,16 @@ function Download() {
         <p className="mt-4 text-[12px] font-light text-faint">
           macOS 14+ · Apple Silicon & Intel · Apple Intelligence on macOS 26+
         </p>
+        <p className="mt-8 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
+          <span className="font-medium text-ink">First launch:</span> macOS blocks apps that
+          aren&apos;t notarized yet. Open System Settings → Privacy &amp; Security and click{" "}
+          <span className="font-medium text-ink">Open Anyway</span>. Once only.
+        </p>
         <a
           href={site.githubUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-8 text-[13px] font-medium text-muted underline decoration-line underline-offset-4 hover:text-ink"
+          className="mt-5 text-[13px] font-medium text-muted underline decoration-line underline-offset-4 hover:text-ink"
         >
           View source
         </a>

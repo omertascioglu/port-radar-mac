@@ -16,9 +16,12 @@ Open [http://localhost:3000](http://localhost:3000).
 Edit `src/lib/site.ts`, or set env vars:
 
 ```bash
-NEXT_PUBLIC_DOWNLOAD_URL=https://github.com/YOU/REPO/releases/latest/download/Port-Radar.dmg
+NEXT_PUBLIC_DOWNLOAD_URL=https://github.com/juansebsol/port-radar-mac/releases/latest/download/Port-Radar.dmg
 NEXT_PUBLIC_PRODUCT_HUNT_URL=https://www.producthunt.com/posts/port-radar
 ```
+
+The default download URL already points at the latest release asset, so it keeps working
+across releases as long as the DMG is named `Port-Radar.dmg` (see `make publish`).
 
 ## Scripts
 

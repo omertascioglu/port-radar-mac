@@ -1,10 +1,17 @@
 # Shared
 .DS_Store
 
+# Local-only — launch copy and working notes, not part of the public repo
+content/
+Docs/plan.md
+Docs/tasks.md
+Docs/rules.md
+
 # Mac app (apps/mac)
 apps/mac/.build/
 apps/mac/DevPort.app/
 apps/mac/Port Radar.app/
+apps/mac/dist/
 .build/
 DevPort.app/
 Port Radar.app/
