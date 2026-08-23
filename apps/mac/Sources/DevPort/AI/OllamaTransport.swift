@@ -106,12 +106,20 @@ protocol OllamaDataLoading: Sendable {
 
 extension URLSession: OllamaDataLoading {}
 
+protocol OllamaTransporting: Sendable {
+    func request(
+        path: String,
+        method: String,
+        body: Data?
+    ) async throws -> Data
+}
+
 struct OllamaHTTPError: Error, Sendable {
     let statusCode: Int
     let hasAPIMessage: Bool
 }
 
-struct OllamaTransport: Sendable {
+struct OllamaTransport: OllamaTransporting, Sendable {
     private let loader: any OllamaDataLoading
     private let policy = OllamaOriginPolicy()
 

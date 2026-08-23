@@ -36,6 +36,20 @@ struct SanitizedProcessContext: Equatable, Sendable {
     let text: String
 }
 
+enum LocalAIPrompt {
+    static func instructions(context: SanitizedProcessContext) -> String {
+        """
+        You are a concise assistant inside Port Radar, a macOS menu-bar app that lists localhost listeners.
+        The user is asking about one specific process. Use only the process context below.
+        If something isn’t in the context, say you don’t know — don’t invent system state.
+        Prefer short, practical answers for developers.
+
+        Process context:
+        \(context.text)
+        """
+    }
+}
+
 enum LocalAIAvailability: Equatable, Sendable {
     case available
     case unavailable(LocalAIError)
