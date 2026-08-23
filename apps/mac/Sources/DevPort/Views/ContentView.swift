@@ -134,17 +134,10 @@ struct ContentView: View {
                 SettingsModal(onDismiss: { showSettings = false })
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if let agentServer {
-                Group {
-                    #if canImport(FoundationModels)
-                    if #available(macOS 26.0, *) {
-                        AgentChatModal(server: agentServer, onDismiss: { self.agentServer = nil })
-                    } else {
-                        AgentUnavailableModal(server: agentServer, onDismiss: { self.agentServer = nil })
-                    }
-                    #else
-                    AgentUnavailableModal(server: agentServer, onDismiss: { self.agentServer = nil })
-                    #endif
-                }
+                AgentChatModal(
+                    server: agentServer,
+                    onDismiss: { self.agentServer = nil }
+                )
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if showTunnels {
                 TunnelsModal(

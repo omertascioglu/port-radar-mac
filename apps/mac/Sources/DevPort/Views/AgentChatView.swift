@@ -1,35 +1,28 @@
 import SwiftUI
 
-struct AgentMessage: Identifiable, Equatable {
-    enum Role: Equatable {
-        case user
-        case assistant
-        case system
-    }
-
-    let id = UUID()
-    let role: Role
-    var text: String
-}
-
-#if canImport(FoundationModels)
-@available(macOS 26.0, *)
 struct AgentChatModal: View {
     let server: DevServer
     let onDismiss: () -> Void
 
-    @State private var conversation: (any LocalAIConversation)?
-    @State private var messages: [AgentMessage] = []
-    @State private var draft = ""
-    @State private var isSending = false
-    @State private var availabilityNote: String?
+    @State private var model: AgentChatModel
     @FocusState private var inputFocused: Bool
+
+    init(server: DevServer, onDismiss: @escaping () -> Void) {
+        self.server = server
+        self.onDismiss = onDismiss
+        _model = State(initialValue: AgentChatModel(
+            server: server,
+            resolver: .live,
+            preference: Preferences.shared.localAIProviderPreference,
+            ollamaModelID: Preferences.shared.ollamaModelID
+        ))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().opacity(0.5)
-            if let availabilityNote {
+            if let availabilityNote = model.availabilityNote {
                 unavailableBody(availabilityNote)
             } else {
                 chatBody
@@ -46,14 +39,36 @@ struct AgentChatModal: View {
         )
         .shadow(color: .white.opacity(0.18), radius: 28, y: 0)
         .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
-        .onAppear(perform: bootstrap)
+        .task {
+            await model.bootstrap()
+            guard !Task.isCancelled, model.availabilityNote == nil else {
+                return
+            }
+            inputFocused = true
+        }
+        .onDisappear {
+            model.beginClose()
+        }
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Ask about process")
-                    .font(.system(size: 15, weight: .semibold))
+                HStack(spacing: 7) {
+                    Text("Ask about process")
+                        .font(.system(size: 15, weight: .semibold))
+                    if let badge = model.badgeText {
+                        Text(badge)
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Color.green.opacity(0.14),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(.green)
+                    }
+                }
                 Text("\(server.processName) · localhost:\(String(server.port)) · pid \(String(server.pid))")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -66,6 +81,8 @@ struct AgentChatModal: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("Close")
             .help("Close")
         }
         .padding(.horizontal, 14)
@@ -88,15 +105,17 @@ struct AgentChatModal: View {
     }
 
     private var chatBody: some View {
-        VStack(spacing: 0) {
+        @Bindable var model = model
+
+        return VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(messages) { message in
+                        ForEach(model.messages) { message in
                             messageBubble(message)
                                 .id(message.id)
                         }
-                        if isSending {
+                        if model.isSending {
                             HStack(spacing: 6) {
                                 ProgressView()
                                     .controlSize(.small)
@@ -109,10 +128,10 @@ struct AgentChatModal: View {
                     }
                     .padding(12)
                 }
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: model.messages.count) { _, _ in
                     scrollToBottom(proxy)
                 }
-                .onChange(of: isSending) { _, _ in
+                .onChange(of: model.isSending) { _, _ in
                     scrollToBottom(proxy)
                 }
             }
@@ -120,28 +139,33 @@ struct AgentChatModal: View {
             Divider().opacity(0.5)
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask about this process…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .focused($inputFocused)
-                    .onSubmit(send)
+                TextField(
+                    "Ask about this process…",
+                    text: $model.draft,
+                    axis: .vertical
+                )
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .focused($inputFocused)
+                .onSubmit(model.send)
 
-                Button(action: send) {
+                Button(action: model.send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.4))
+                        .foregroundStyle(
+                            model.canSend
+                                ? Color.accentColor
+                                : Color.secondary.opacity(0.4)
+                        )
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSend)
+                .disabled(!model.canSend)
+                .accessibilityLabel("Send")
                 .help("Send")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
-    }
-
-    private var canSend: Bool {
-        !isSending && availabilityNote == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     @ViewBuilder
@@ -154,7 +178,13 @@ struct AgentChatModal: View {
                     .font(.system(size: 12.5))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.accentColor.opacity(0.22), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(
+                        Color.accentColor.opacity(0.22),
+                        in: RoundedRectangle(
+                            cornerRadius: 10,
+                            style: .continuous
+                        )
+                    )
             }
         case .assistant:
             HStack {
@@ -162,7 +192,13 @@ struct AgentChatModal: View {
                     .font(.system(size: 12.5))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(
+                        Color.primary.opacity(0.07),
+                        in: RoundedRectangle(
+                            cornerRadius: 10,
+                            style: .continuous
+                        )
+                    )
                     .textSelection(.enabled)
                 Spacer(minLength: 24)
             }
@@ -174,110 +210,20 @@ struct AgentChatModal: View {
         }
     }
 
-    private func bootstrap() {
-        Task { @MainActor in
-            let provider = AppleFoundationModelProvider()
-            switch await provider.availability(modelID: nil) {
-            case .available:
-                do {
-                    conversation = try await provider.makeConversation(
-                        context: server.sanitizedAgentContext,
-                        modelID: nil
-                    )
-                    messages = [
-                        AgentMessage(
-                            role: .system,
-                            text: "Apple Intelligence has this process’s port, PID, command, and project context. Ask anything about it."
-                        )
-                    ]
-                    inputFocused = true
-                } catch {
-                    availabilityNote = error.localizedDescription
-                }
-            case .unavailable(let error):
-                availabilityNote = error.localizedDescription
-            }
-        }
-    }
-
-    private func send() {
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, let conversation, !prompt.isEmpty else { return }
-        draft = ""
-        messages.append(AgentMessage(role: .user, text: prompt))
-        isSending = true
-
-        Task { @MainActor in
-            defer { isSending = false }
-            do {
-                let response = try await conversation.respond(to: prompt)
-                messages.append(AgentMessage(role: .assistant, text: response))
-            } catch {
-                messages.append(AgentMessage(
-                    role: .system,
-                    text: error.localizedDescription
-                ))
-            }
-        }
-    }
-
     private func close() {
-        let activeConversation = conversation
-        conversation = nil
-        Task { @MainActor in
-            await activeConversation?.close()
-            onDismiss()
-        }
+        model.beginClose()
+        onDismiss()
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
             withAnimation(.easeOut(duration: 0.15)) {
-                if isSending {
+                if model.isSending {
                     proxy.scrollTo("thinking", anchor: .bottom)
-                } else if let last = messages.last {
+                } else if let last = model.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
         }
-    }
-}
-
-#endif
-
-/// Fallback when the app is running on an older macOS without Foundation Models.
-struct AgentUnavailableModal: View {
-    let server: DevServer
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Ask about process")
-                .font(.system(size: 15, weight: .semibold))
-            Text("\(server.processName) · localhost:\(String(server.port))")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Text("Ask requires macOS 26 or later with Apple Intelligence.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Close", action: onDismiss)
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(18)
-        .frame(width: 300, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-        )
-        .shadow(color: .white.opacity(0.18), radius: 28, y: 0)
-        .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
     }
 }
