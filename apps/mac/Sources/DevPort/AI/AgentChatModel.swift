@@ -126,13 +126,13 @@ final class AgentChatModel {
         badgeText = nil
 
         closeTask = Task {
+            await activeConversation?.close()
             if let generation {
                 await generation.value
             }
             if let bootstrap {
                 await bootstrap.value
             }
-            await activeConversation?.close()
         }
     }
 

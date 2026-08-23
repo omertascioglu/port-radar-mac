@@ -194,6 +194,44 @@ private actor CancellationAwareConversationSpy: LocalAIConversation {
     }
 }
 
+/// Simulates a provider whose response ignores caller cancellation and can
+/// unwind only after the provider-level close hook runs.
+private actor CloseReleasedConversationSpy: LocalAIConversation {
+    nonisolated let providerID: LocalAIProviderID = .ollama
+
+    private var prompts: [String] = []
+    private var closeCount = 0
+    private var pendingResponse: CheckedContinuation<String, Never>?
+    private var responseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func respond(to prompt: String) async throws -> String {
+        prompts.append(prompt)
+        let waiters = responseWaiters
+        responseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return await withCheckedContinuation { continuation in
+            pendingResponse = continuation
+        }
+    }
+
+    func close() async {
+        closeCount += 1
+        pendingResponse?.resume(returning: "Released by close")
+        pendingResponse = nil
+    }
+
+    func waitUntilResponding() async {
+        guard prompts.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            responseWaiters.append(continuation)
+        }
+    }
+
+    func snapshot() -> ConversationSnapshot {
+        .init(prompts: prompts, closeCount: closeCount)
+    }
+}
+
 private actor ControlledCreationProvider: LocalAIProvider {
     nonisolated let id: LocalAIProviderID
 
@@ -470,6 +508,37 @@ final class AgentChatModelTests: XCTestCase {
         XCTAssertTrue(model.messages.isEmpty)
     }
 
+    func testCloseRunsProviderCleanupBeforeAwaitingNonCooperativeResponse() async {
+        let conversation = CloseReleasedConversationSpy()
+        let provider = ChatProviderSpy(
+            id: .ollama,
+            conversation: conversation
+        )
+        let model = makeModel(provider: provider, preference: .ollama)
+        await model.bootstrap()
+        model.draft = "Release this through close"
+        model.send()
+        await conversation.waitUntilResponding()
+
+        model.beginClose()
+
+        guard await waitUntilConversationCloses(conversation) else {
+            XCTFail("Provider close was blocked behind response completion")
+            // Let the intentionally broken RED run unwind without leaking a
+            // permanently suspended task into the rest of the suite.
+            await conversation.close()
+            await model.close()
+            return
+        }
+        await model.close()
+
+        let snapshot = await conversation.snapshot()
+        XCTAssertEqual(snapshot.closeCount, 1)
+        XCTAssertFalse(model.isSending)
+        XCTAssertTrue(model.messages.isEmpty)
+        XCTAssertNil(model.availabilityNote)
+    }
+
     func testResponseCompletingAfterCloseIsIgnored() async {
         let conversation = ControlledConversationSpy(providerID: .ollama)
         let provider = ChatProviderSpy(
@@ -657,5 +726,15 @@ final class AgentChatModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Condition did not become true", file: file, line: line)
+    }
+
+    private func waitUntilConversationCloses(
+        _ conversation: CloseReleasedConversationSpy
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await conversation.snapshot().closeCount > 0 { return true }
+            await Task.yield()
+        }
+        return false
     }
 }
