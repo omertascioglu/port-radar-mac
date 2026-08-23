@@ -43,6 +43,40 @@ cannot be guaranteed if the app or Ollama exits first. Port Radar never stops th
 This privacy boundary applies to **Ask**. The separate, user-triggered **Share** action deliberately
 creates a public Cloudflare tunnel for the selected localhost port.
 
+### Set up the optional Ollama fallback
+
+1. Install Ollama yourself from the
+   [official macOS download](https://ollama.com/download/mac). Port Radar never installs or
+   updates Ollama.
+2. In Ollama, explicitly install or pull a model that runs locally. Port Radar never chooses or
+   pulls a model for you.
+3. Start Ollama yourself, or press **Open Ollama** in Port Radar Settings. That button is an
+   explicit user action; Port Radar does not start Ollama silently.
+4. In Port Radar Settings, enable Ask, choose **Automatic** or **Ollama**, then choose an installed
+   model that passes Port Radar's local-metadata checks. Automatic uses it only when Apple's
+   on-device model is unavailable; Ollama forces the selected local model.
+
+### Ollama troubleshooting
+
+- **Ollama is not running:** Start the installed Ollama app, or press **Open Ollama**, then try
+  Settings again. If Port Radar reports that the app was not found, install it from Ollama's
+  [official macOS download](https://ollama.com/download/mac).
+- **No local models appear:** Install or pull a local model explicitly in Ollama, then reopen
+  Settings. Remote-only, cloud, and metadata-ambiguous models are intentionally excluded; do not
+  bypass Port Radar's local-model validation.
+- **The selected model was removed or is unavailable:** Restore that model locally or choose
+  another installed model that passes validation. Port Radar clears a saved selection when the
+  model no longer validates.
+- **A request times out:** Confirm the local Ollama service is responsive, reduce competing local
+  load, and retry. You may choose another already-installed validated local model; Port Radar
+  never switches models or providers silently.
+- **Version or metadata compatibility error:** Update Ollama through its official macOS release
+  and refresh Settings. Older responses that do not provide enough evidence of local storage are
+  rejected instead of guessed safe. As defense in depth, keep Ollama's `disable_ollama_cloud` /
+  `OLLAMA_NO_CLOUD` local-only setting enabled as described in the
+  [Ollama FAQ](https://docs.ollama.com/faq); this supplements rather than replaces Port Radar's
+  validation.
+
 ## Build & run
 
 From this directory (`apps/mac`):
