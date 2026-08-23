@@ -2,7 +2,17 @@ import SwiftUI
 
 struct SettingsModal: View {
     @Bindable private var preferences = Preferences.shared
+    @State private var ollamaSettings = OllamaSettingsModel()
     let onDismiss: () -> Void
+
+    private let ollamaDownloadURL = URL(
+        string: "https://ollama.com/download/mac"
+    )!
+
+    private var showsOllamaControls: Bool {
+        preferences.askAboutProcessEnabled
+            && preferences.localAIProviderPreference.usesOllamaControls
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +70,66 @@ struct SettingsModal: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                    }
+
+                    if preferences.askAboutProcessEnabled {
+                        Divider().padding(.leading, 12)
+
+                        settingsRow("AI provider") {
+                            Picker(
+                                "AI provider",
+                                selection: $preferences.localAIProviderPreference
+                            ) {
+                                ForEach(LocalAIProviderPreference.allCases) { provider in
+                                    Text(provider.displayName).tag(provider)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .fixedSize()
+                        }
+
+                        if preferences.localAIProviderPreference.usesOllamaControls {
+                            Divider().padding(.leading, 12)
+
+                            settingsRow("Ollama model") {
+                                switch ollamaSettings.state {
+                                case .ready(let models) where !models.isEmpty:
+                                    Picker(
+                                        "Ollama model",
+                                        selection: $preferences.ollamaModelID
+                                    ) {
+                                        Text("Choose…").tag("")
+                                        ForEach(models) { model in
+                                            Text(model.id).tag(model.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
+                                    .frame(maxWidth: 170)
+                                default:
+                                    Text("None")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Divider().padding(.leading, 12)
+
+                            ollamaStatus
+                        }
+
+                        Divider().padding(.leading, 12)
+
+                        Text(
+                            "Chat stays on this Mac. Cloud and remote Ollama models are excluded."
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
                     }
                 }
 
@@ -130,7 +200,19 @@ struct SettingsModal: View {
                 }
             }
             .padding(.horizontal, 16)
-            .onAppear { preferences.refreshLaunchAtLogin() }
+            .onAppear {
+                preferences.refreshLaunchAtLogin()
+                updateOllamaRefresh()
+            }
+            .onChange(of: preferences.askAboutProcessEnabled) {
+                updateOllamaRefresh()
+            }
+            .onChange(of: preferences.localAIProviderPreference) {
+                updateOllamaRefresh()
+            }
+            .onDisappear {
+                ollamaSettings.cancelRefresh()
+            }
 
             Divider()
                 .padding(.top, 16)
@@ -144,7 +226,7 @@ struct SettingsModal: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
-        .frame(width: 320)
+        .frame(width: 352)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor))
@@ -155,6 +237,55 @@ struct SettingsModal: View {
         )
         .shadow(color: .white.opacity(0.16), radius: 24, y: 0)
         .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
+    }
+
+    private var ollamaStatus: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                if ollamaSettings.state == .loading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Text(ollamaSettings.state.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 4)
+
+                if ollamaSettings.state == .notRunning {
+                    Button("Open Ollama") {
+                        ollamaSettings.openOllamaAndRetry(
+                            selectedModelID: preferences.ollamaModelID
+                        )
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if ollamaSettings.showsDownloadLink {
+                HStack(spacing: 5) {
+                    Text("Install Ollama to use a local model.")
+                    Link("Download Ollama", destination: ollamaDownloadURL)
+                }
+                .font(.caption2)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    private func updateOllamaRefresh() {
+        guard showsOllamaControls else {
+            ollamaSettings.cancelRefresh()
+            return
+        }
+
+        ollamaSettings.refresh(
+            selectedModelID: preferences.ollamaModelID
+        )
     }
 
     private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
