@@ -1,7 +1,34 @@
+import AppKit
 import SwiftUI
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let cleanup: @Sendable () async -> Void
+
+    override init() {
+        self.cleanup = {
+            await LocalAIConversationRegistry.shared.closeActive()
+        }
+        super.init()
+    }
+
+    init(cleanup: @escaping @Sendable () async -> Void) {
+        self.cleanup = cleanup
+        super.init()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        let cleanup = cleanup
+        Task {
+            await cleanup()
+        }
+    }
+}
 
 @main
 struct DevPortApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self)
+    private var appDelegate
+
     init() {
         // Touch preferences so defaults are registered before the scanner starts.
         _ = Preferences.shared

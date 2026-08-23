@@ -21,6 +21,8 @@ final class AgentChatModel {
     private let resolver: AIProviderResolver
     private let preference: LocalAIProviderPreference
     private let ollamaModelID: String
+    private let conversationRegistry: LocalAIConversationRegistry
+    private let conversationToken = UUID()
     private let contextBuilder:
         @MainActor @Sendable (DevServer) -> SanitizedProcessContext
 
@@ -43,6 +45,7 @@ final class AgentChatModel {
         resolver: AIProviderResolver,
         preference: LocalAIProviderPreference,
         ollamaModelID: String,
+        conversationRegistry: LocalAIConversationRegistry = .shared,
         contextBuilder: @escaping @MainActor @Sendable (DevServer) ->
             SanitizedProcessContext = { $0.sanitizedAgentContext }
     ) {
@@ -50,6 +53,7 @@ final class AgentChatModel {
         self.resolver = resolver
         self.preference = preference
         self.ollamaModelID = ollamaModelID
+        self.conversationRegistry = conversationRegistry
         self.contextBuilder = contextBuilder
     }
 
@@ -133,6 +137,7 @@ final class AgentChatModel {
             if let bootstrap {
                 await bootstrap.value
             }
+            await conversationRegistry.unregister(token: conversationToken)
         }
     }
 
@@ -158,7 +163,25 @@ final class AgentChatModel {
                 return
             }
 
-            conversation = resolved.conversation
+            guard let registeredConversation = await conversationRegistry
+                .register(
+                    token: conversationToken,
+                    conversation: resolved.conversation
+                )
+            else { return }
+
+            guard !isClosed,
+                  !Task.isCancelled,
+                  bootstrapAttempt == attempt
+            else {
+                await registeredConversation.close()
+                await conversationRegistry.unregister(
+                    token: conversationToken
+                )
+                return
+            }
+
+            conversation = registeredConversation
             badgeText = resolved.badgeText
             messages = [
                 .init(
