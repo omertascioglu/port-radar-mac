@@ -32,6 +32,7 @@ private actor OllamaClientSpy: OllamaClientProtocol {
         self.validationResult = validationResult
     }
 
+    func version() async throws -> String { "test" }
     func localModels() async throws -> [OllamaModel] { [] }
 
     func validateLocalModel(_ id: String) async throws {

@@ -1,6 +1,7 @@
 import Foundation
 
 protocol OllamaClientProtocol: Sendable {
+    func version() async throws -> String
     func localModels() async throws -> [OllamaModel]
     func validateLocalModel(_ id: String) async throws
     func chat(
@@ -15,6 +16,15 @@ struct OllamaClient: OllamaClientProtocol, Sendable {
 
     init(transport: any OllamaTransporting = OllamaTransport()) {
         self.transport = transport
+    }
+
+    func version() async throws -> String {
+        let data = try await request(
+            path: "/api/version",
+            method: "GET",
+            body: nil
+        )
+        return try decode(OllamaVersionResponse.self, from: data).version
     }
 
     func localModels() async throws -> [OllamaModel] {

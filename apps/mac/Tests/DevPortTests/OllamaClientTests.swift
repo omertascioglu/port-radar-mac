@@ -45,6 +45,38 @@ private actor QueueTransport: OllamaTransporting {
 }
 
 final class OllamaClientTests: XCTestCase {
+    func testVersionUsesExactServiceDiscoveryRequest() async throws {
+        let transport = QueueTransport([
+            .success(Data("{\"version\":\"0.11.8\"}".utf8)),
+        ])
+        let client = OllamaClient(transport: transport)
+
+        let version = try await client.version()
+
+        XCTAssertEqual(version, "0.11.8")
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(
+            requests,
+            [.init(path: "/api/version", method: "GET", body: nil)]
+        )
+    }
+
+    func testMalformedVersionMapsToBoundedError() async {
+        let secret = "synthetic-version-body-must-not-escape"
+        let client = OllamaClient(transport: QueueTransport([
+            .success(Data("not-json-\(secret)".utf8)),
+        ]))
+
+        do {
+            _ = try await client.version()
+            XCTFail("Expected malformed version JSON")
+        } catch {
+            XCTAssertEqual(error as? LocalAIError, .malformedResponse)
+            XCTAssertFalse(String(describing: error).contains(secret))
+            XCTAssertTrue(Mirror(reflecting: error).children.isEmpty)
+        }
+    }
+
     func testListModelsReturnsOnlyProvenLocalEntries() async throws {
         let transport = QueueTransport([.success(Data(
             """
