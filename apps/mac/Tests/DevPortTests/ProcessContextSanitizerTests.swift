@@ -2,6 +2,111 @@ import XCTest
 @testable import DevPort
 
 final class ProcessContextSanitizerTests: XCTestCase {
+    func testDevServerDoesNotReparseMissingSensitiveArgvValue() {
+        let processID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let arguments = ["app", "--token", "--port", "3000", "SampleProject"]
+        let details = ProcessDetails(
+            pid: processID,
+            parentPID: processID,
+            executablePath: "/usr/local/bin/app",
+            arguments: arguments,
+            workingDirectory: "/tmp/SampleProject",
+            startTime: nil
+        )
+        let server = DevServer(
+            listener: ListeningPort(port: 3000, pid: processID),
+            details: details,
+            project: nil
+        )
+
+        let value = server.sanitizedAgentContext.text
+
+        XCTAssertEqual(server.command, arguments.joined(separator: " "))
+        XCTAssertTrue(
+            value.contains("command: app --token --port 3000 SampleProject")
+        )
+        XCTAssertTrue(value.contains("port: 3000"))
+    }
+
+    func testDevServerRedactsWholeSeparateArgvValueAndPreservesRawCommand() {
+        let processID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let secretValue = "synthetic-head synthetic-tail"
+        let arguments = [
+            "app", "--token", secretValue, "--host", "localhost",
+            "--port", "3000", "SampleProject",
+        ]
+        let details = ProcessDetails(
+            pid: processID,
+            parentPID: processID,
+            executablePath: "/usr/local/bin/app",
+            arguments: arguments,
+            workingDirectory: "/tmp/SampleProject",
+            startTime: nil
+        )
+        let server = DevServer(
+            listener: ListeningPort(port: 3000, pid: processID),
+            details: details,
+            project: ProjectInfo(
+                name: "SampleProject",
+                rootPath: "/tmp/SampleProject",
+                framework: .node
+            )
+        )
+
+        let value = server.sanitizedAgentContext.text
+
+        XCTAssertEqual(server.command, arguments.joined(separator: " "))
+        XCTAssertTrue(server.rawAgentContext.contains(secretValue))
+        XCTAssertFalse(value.contains("synthetic-head"))
+        XCTAssertFalse(value.contains("synthetic-tail"))
+        XCTAssertTrue(
+            value.contains(
+                "command: app --token=[REDACTED] --host localhost " +
+                "--port 3000 SampleProject"
+            )
+        )
+        XCTAssertTrue(value.contains("projectName: SampleProject"))
+        XCTAssertTrue(value.contains("framework: Node"))
+        XCTAssertTrue(value.contains("port: 3000"))
+    }
+
+    func testSanitizeCommandRedactsNormalSeparateArgvValue() {
+        let arguments = [
+            "app", "--PassWord", "synthetic-one-token", "--host", "localhost",
+        ]
+
+        let first = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+        let repeated = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(
+            first,
+            "app --PassWord=[REDACTED] --host localhost"
+        )
+        XCTAssertEqual(first, repeated)
+        XCTAssertEqual(ProcessContextSanitizer.sanitize(first).text, first)
+    }
+
+    func testSanitizeCommandDoesNotConsumeSafeFlagWhenValueIsMissing() {
+        let arguments = ["app", "--token", "--port", "3000", "SampleProject"]
+
+        let first = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+        let repeated = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(first, arguments.joined(separator: " "))
+        XCTAssertEqual(first, repeated)
+        XCTAssertTrue(first.contains("--port 3000"))
+        XCTAssertTrue(first.contains("SampleProject"))
+    }
+
+    func testSanitizeCommandDoesNotConsumeSafeFlagAfterEmptyValue() {
+        let arguments = ["app", "--token", "", "--port", "3000"]
+
+        let value = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(value, arguments.joined(separator: " "))
+        XCTAssertTrue(value.contains("--port 3000"))
+    }
+
     func testRedactsAdditionalGitHubCredentialPrefixes() {
         let credentials = ["gho_", "ghu_", "ghs_", "ghr_"].map {
             $0 + "1234567890Synthetic"

@@ -56,20 +56,24 @@ extension DevServer {
 
     /// Process snapshot safe to share with either local AI provider.
     var sanitizedAgentContext: SanitizedProcessContext {
-        let safeCommand: String?
-        if let commandArguments, !commandArguments.isEmpty {
-            safeCommand = ProcessContextSanitizer.sanitizeCommand(
-                arguments: commandArguments
-            )
-        } else {
-            safeCommand = command
+        guard let commandArguments, !commandArguments.isEmpty else {
+            return ProcessContextSanitizer.sanitize(rawAgentContext)
         }
-        return ProcessContextSanitizer.sanitize(
-            agentContext(command: safeCommand)
+        let safeCommand = ProcessContextSanitizer.sanitizeCommand(
+            arguments: commandArguments
+        )
+        return SanitizedProcessContext(
+            text: agentContext(
+                command: safeCommand,
+                preservingSanitizedCommand: true
+            )
         )
     }
 
-    private func agentContext(command commandSnapshot: String?) -> String {
+    private func agentContext(
+        command commandSnapshot: String?,
+        preservingSanitizedCommand: Bool = false
+    ) -> String {
         var lines: [String] = [
             "port: \(port)",
             "url: http://localhost:\(port)",
@@ -87,7 +91,9 @@ extension DevServer {
         if let workingDirectory {
             lines.append("workingDirectory: \(workingDirectory)")
         }
+        var commandLineIndex: Int?
         if let commandSnapshot {
+            commandLineIndex = lines.count
             lines.append("command: \(commandSnapshot)")
         }
         if let startTime {
@@ -100,6 +106,11 @@ extension DevServer {
             lines.append("projectName: \(project.name)")
             lines.append("projectRoot: \(project.rootPath)")
             lines.append("framework: \(project.framework.rawValue)")
+        }
+        if preservingSanitizedCommand {
+            for index in lines.indices where index != commandLineIndex {
+                lines[index] = ProcessContextSanitizer.sanitize(lines[index]).text
+            }
         }
         return lines.joined(separator: "\n")
     }

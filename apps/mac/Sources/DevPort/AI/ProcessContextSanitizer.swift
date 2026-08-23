@@ -53,8 +53,26 @@ enum ProcessContextSanitizer {
     }
 
     static func sanitizeCommand(arguments: [String]) -> String {
-        let sanitizedArguments = arguments.map(sanitizeCommandArgument)
-        return sanitize(sanitizedArguments.joined(separator: " ")).text
+        var sanitizedArguments: [String] = []
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            if isStandaloneSensitiveCommandLineOption(argument),
+               arguments.indices.contains(index + 1) {
+                let nextArgument = arguments[index + 1]
+                if !nextArgument.isEmpty,
+                   !looksLikeCommandLineOption(nextArgument) {
+                    sanitizedArguments.append(
+                        "\(argument)=\(redactionMarker)"
+                    )
+                    index += 2
+                    continue
+                }
+            }
+            sanitizedArguments.append(sanitizeCommandArgument(argument))
+            index += 1
+        }
+        return sanitizedArguments.joined(separator: " ")
     }
 
     private static func sanitizeCommandArgument(_ argument: String) -> String {
@@ -72,7 +90,25 @@ enum ProcessContextSanitizer {
             in: value,
             with: "$1=\(redactionMarker)"
         )
-        return value
+        return sanitize(value).text
+    }
+
+    private static func isStandaloneSensitiveCommandLineOption(
+        _ argument: String
+    ) -> Bool {
+        let pattern =
+            #"(?i)^--(?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z0-9][A-Za-z0-9_-]*$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern)
+        else { return true }
+        let range = NSRange(argument.startIndex..., in: argument)
+        return expression.firstMatch(in: argument, range: range) != nil
+    }
+
+    private static func looksLikeCommandLineOption(_ argument: String) -> Bool {
+        guard argument.hasPrefix("-"), argument != "-" else { return false }
+        if argument == "--" { return true }
+        let name = argument.drop(while: { $0 == "-" })
+        return name.first?.isLetter == true
     }
 
     private static func replacing(
