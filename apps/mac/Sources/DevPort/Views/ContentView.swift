@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution.
 import SwiftUI
 
 /// Servers grouped by detected project (or System / Other buckets).

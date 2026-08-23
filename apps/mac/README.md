@@ -1,3 +1,5 @@
+<!-- Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution. -->
+
 <p align="center">
   <img src="Support/AppIcon.png" alt="Port Radar" width="128" height="128">
 </p>
@@ -7,6 +9,39 @@
 A native macOS menu-bar app that detects dev servers listening on localhost — Vite, Next.js, Python, Docker, and anything else bound to a TCP port — and lets you inspect and kill them without hunting through terminals.
 
 Swift + SwiftUI (`MenuBarExtra`), macOS 14+. No Xcode project: built with Swift Package Manager and edited in any editor. Xcode is required only for its toolchain.
+
+## Ask: Apple on-device model with local Ollama fallback
+
+Ask is provider-neutral and stays local. In **Automatic** mode, Port Radar uses Apple's
+on-device `SystemLanguageModel` when it is available. That path requires macOS 26 or later,
+supported Apple hardware, and Apple Intelligence to be enabled and ready. If Apple is
+unavailable, Automatic can fall back to the already-selected, validated local Ollama model.
+Selecting Apple Intelligence or Ollama in Settings forces that provider instead. Apple documents
+the on-device framework in its [Foundation Models overview](https://developer.apple.com/documentation/foundationmodels/).
+
+Ollama is optional. Port Radar never installs it, starts it without the user pressing **Open
+Ollama**, or pulls a model. Settings lists only models that Ollama reports as already installed
+and for which the model metadata provides positive local-storage evidence. The selected model is
+checked again immediately before chat. Remote, cloud, and ambiguous models are rejected even if
+the Ollama API is reached at localhost, because localhost alone does not prove where inference
+runs. Ollama documents its [local API](https://docs.ollama.com/api/introduction),
+[model metadata](https://docs.ollama.com/api/tags), and [cloud behavior](https://docs.ollama.com/cloud).
+
+Port Radar sends Ollama requests only to `http://127.0.0.1:11434` and only to the version, tags,
+show, and chat API paths. It supplies no tools. As additional defense in depth, enable Ollama's
+`disable_ollama_cloud` / `OLLAMA_NO_CLOUD` local-only setting described in the
+[Ollama FAQ](https://docs.ollama.com/faq).
+
+The process snapshot is sanitized before either provider receives it: likely tokens, passwords,
+authorization values, URL credentials, and similar secrets are replaced with `[REDACTED]`.
+Port Radar keeps process context, prompts, and answers in memory only; it persists only the Ask
+toggle, provider preference, and selected model identifier. Ollama loads the selected model on
+the first prompt. Closing chat cancels active generation and asks Ollama to unload that model
+with `keep_alive: 0`; app-quit cleanup makes the same best-effort request, but immediate unload
+cannot be guaranteed if the app or Ollama exits first. Port Radar never stops the Ollama service.
+
+This privacy boundary applies to **Ask**. The separate, user-triggered **Share** action deliberately
+creates a public Cloudflare tunnel for the selected localhost port.
 
 ## Build & run
 
