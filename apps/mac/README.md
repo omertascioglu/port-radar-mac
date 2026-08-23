@@ -45,9 +45,8 @@ creates a public Cloudflare tunnel for the selected localhost port.
 
 ### Set up the optional Ollama fallback
 
-1. Install Ollama yourself from the
-   [official macOS download](https://ollama.com/download/mac). Port Radar never installs or
-   updates Ollama.
+1. Install Ollama yourself from the official Ollama macOS download page. Port Radar never
+   installs or updates Ollama.
 2. In Ollama, explicitly install or pull a model that runs locally. Port Radar never chooses or
    pulls a model for you.
 3. Start Ollama yourself, or press **Open Ollama** in Port Radar Settings. That button is an
@@ -60,7 +59,7 @@ creates a public Cloudflare tunnel for the selected localhost port.
 
 - **Ollama is not running:** Start the installed Ollama app, or press **Open Ollama**, then try
   Settings again. If Port Radar reports that the app was not found, install it from Ollama's
-  [official macOS download](https://ollama.com/download/mac).
+  official macOS download page.
 - **No local models appear:** Install or pull a local model explicitly in Ollama, then reopen
   Settings. Remote-only, cloud, and metadata-ambiguous models are intentionally excluded; do not
   bypass Port Radar's local-model validation.
