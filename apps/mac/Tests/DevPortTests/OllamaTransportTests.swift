@@ -19,8 +19,24 @@ private final class AuthenticationChallengeSenderStub:
     func cancel(_ challenge: URLAuthenticationChallenge) {}
 }
 
+private final class NilURLHTTPURLResponse:
+    HTTPURLResponse,
+    @unchecked Sendable
+{
+    override var url: URL? { nil }
+}
+
+private enum FinalResponseURL: Sendable {
+    case requestURL
+    case explicit(URL)
+    case missing
+}
+
 private enum LoaderResponse: Sendable {
-    case http(statusCode: Int)
+    case http(
+        statusCode: Int,
+        finalURL: FinalResponseURL = .requestURL
+    )
     case nonHTTP
     case cancellation
 }
@@ -39,16 +55,32 @@ private actor LoaderSpy: OllamaDataLoading {
         requests.append(request)
 
         switch response {
-        case .http(let statusCode):
-            return (
-                data,
-                HTTPURLResponse(
+        case .http(let statusCode, let finalURL):
+            let response: HTTPURLResponse
+            switch finalURL {
+            case .requestURL:
+                response = HTTPURLResponse(
                     url: request.url!,
                     statusCode: statusCode,
                     httpVersion: nil,
                     headerFields: nil
                 )!
-            )
+            case .explicit(let url):
+                response = HTTPURLResponse(
+                    url: url,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            case .missing:
+                response = NilURLHTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            }
+            return (data, response)
         case .nonHTTP:
             return (
                 data,
@@ -196,7 +228,7 @@ final class OllamaTransportTests: XCTestCase {
 
     func testBuildsExactRequestsAndAddsJSONContentTypeOnlyWithBody() async throws {
         let loader = LoaderSpy(data: Data("success".utf8))
-        let transport = OllamaTransport(loader: loader)
+        let transport = OllamaTransport.testInstance(loader: loader)
         let body = Data("{\"model\":\"qwen3:4b\"}".utf8)
 
         let postData = try await transport.request(
@@ -230,7 +262,7 @@ final class OllamaTransportTests: XCTestCase {
 
     func testRejectsUnsafePathBeforeInvokingLoader() async {
         let loader = LoaderSpy()
-        let transport = OllamaTransport(loader: loader)
+        let transport = OllamaTransport.testInstance(loader: loader)
         let unsafePaths = [
             "/api/pull",
             "/api/../api/chat",
@@ -254,7 +286,9 @@ final class OllamaTransportTests: XCTestCase {
     }
 
     func testRejectsNonHTTPResponseAsMalformed() async {
-        let transport = OllamaTransport(loader: LoaderSpy(response: .nonHTTP))
+        let transport = OllamaTransport.testInstance(
+            loader: LoaderSpy(response: .nonHTTP)
+        )
 
         do {
             _ = try await transport.request(path: "/api/version")
@@ -264,9 +298,36 @@ final class OllamaTransportTests: XCTestCase {
         }
     }
 
+    func testRejectsFinalResponseURLOutsideLocalPolicyBeforeReturningData() async {
+        let unsafeFinalURLs: [FinalResponseURL] = [
+            .explicit(URL(string: "https://ollama.com/api/chat")!),
+            .explicit(URL(string:
+                "http://127.0.0.1:11435/api/chat")!),
+            .explicit(URL(string:
+                "http://127.0.0.1:11434/api/pull")!),
+            .explicit(URL(string: "not-an-absolute-http-url")!),
+            .missing,
+        ]
+
+        for finalURL in unsafeFinalURLs {
+            let loader = LoaderSpy(
+                response: .http(statusCode: 200, finalURL: finalURL),
+                data: Data("must-not-be-returned".utf8)
+            )
+            let transport = OllamaTransport.testInstance(loader: loader)
+
+            do {
+                _ = try await transport.request(path: "/api/chat")
+                XCTFail("Expected unsafe final response URL to be rejected")
+            } catch {
+                XCTAssertEqual(error as? LocalAIError, .unsafeLocalEndpoint)
+            }
+        }
+    }
+
     func testRejectsEveryRedirectStatusAsUnsafe() async {
         for statusCode in [300, 302, 307, 308, 399] {
-            let transport = OllamaTransport(
+            let transport = OllamaTransport.testInstance(
                 loader: LoaderSpy(response: .http(statusCode: statusCode))
             )
 
@@ -282,7 +343,7 @@ final class OllamaTransportTests: XCTestCase {
     func testHTTPErrorContainsOnlyBoundedMetadata() async {
         let secret = "request-secret-that-must-not-escape"
         let body = Data("{\"error\":\"server echoed \(secret)\"}".utf8)
-        let transport = OllamaTransport(
+        let transport = OllamaTransport.testInstance(
             loader: LoaderSpy(response: .http(statusCode: 500), data: body)
         )
 
@@ -316,7 +377,7 @@ final class OllamaTransportTests: XCTestCase {
         ]
 
         for (data, expectedHasMessage) in cases {
-            let transport = OllamaTransport(
+            let transport = OllamaTransport.testInstance(
                 loader: LoaderSpy(response: .http(statusCode: 404), data: data)
             )
 
@@ -333,7 +394,9 @@ final class OllamaTransportTests: XCTestCase {
     }
 
     func testLoaderCancellationRemainsCancellationError() async {
-        let transport = OllamaTransport(loader: LoaderSpy(response: .cancellation))
+        let transport = OllamaTransport.testInstance(
+            loader: LoaderSpy(response: .cancellation)
+        )
 
         do {
             _ = try await transport.request(path: "/api/chat")

@@ -112,12 +112,22 @@ struct OllamaHTTPError: Error, Sendable {
 }
 
 struct OllamaTransport: Sendable {
-    let loader: any OllamaDataLoading
+    private let loader: any OllamaDataLoading
     private let policy = OllamaOriginPolicy()
 
-    init(loader: any OllamaDataLoading = OllamaSessionFactory.make()) {
+    init() {
+        loader = OllamaSessionFactory.make()
+    }
+
+    private init(loader: any OllamaDataLoading) {
         self.loader = loader
     }
+
+    #if DEBUG
+    static func testInstance(loader: any OllamaDataLoading) -> Self {
+        Self(loader: loader)
+    }
+    #endif
 
     func request(
         path: String,
@@ -146,6 +156,9 @@ struct OllamaTransport: Sendable {
         let (data, response) = try await loader.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw LocalAIError.malformedResponse
+        }
+        guard let finalURL = http.url, policy.allows(finalURL) else {
+            throw LocalAIError.unsafeLocalEndpoint
         }
         if (300..<400).contains(http.statusCode) {
             throw LocalAIError.unsafeLocalEndpoint
