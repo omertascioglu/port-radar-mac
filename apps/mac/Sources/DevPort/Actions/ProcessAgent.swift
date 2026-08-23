@@ -42,15 +42,15 @@ enum ProcessAgent {
         Prefer short, practical answers for developers.
 
         Process context:
-        \(server.agentContext)
+        \(server.sanitizedAgentContext.text)
         """
     }
 }
 #endif
 
 extension DevServer {
-    /// Snapshot fed to Apple Intelligence when asking about this listener.
-    var agentContext: String {
+    /// Provider-neutral process snapshot before sensitive values are removed.
+    var rawAgentContext: String {
         var lines: [String] = [
             "port: \(port)",
             "url: http://localhost:\(port)",
@@ -83,5 +83,10 @@ extension DevServer {
             lines.append("framework: \(project.framework.rawValue)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Process snapshot safe to share with either local AI provider.
+    var sanitizedAgentContext: SanitizedProcessContext {
+        ProcessContextSanitizer.sanitize(rawAgentContext)
     }
 }
