@@ -60,6 +60,24 @@ enum ProcessContextSanitizer {
             if isStandaloneSensitiveCommandLineOption(argument),
                arguments.indices.contains(index + 1) {
                 let nextArgument = arguments[index + 1]
+                if isAuthorizationCommandLineOption(argument),
+                   nextArgument.caseInsensitiveCompare("Bearer") == .orderedSame {
+                    if arguments.indices.contains(index + 2) {
+                        let credential = arguments[index + 2]
+                        if !credential.isEmpty,
+                           !looksLikeCommandLineOption(credential) {
+                            sanitizedArguments.append(
+                                "\(argument)=\(redactionMarker)"
+                            )
+                            index += 3
+                            continue
+                        }
+                    }
+
+                    sanitizedArguments.append(argument)
+                    index += 1
+                    continue
+                }
                 if !nextArgument.isEmpty,
                    !looksLikeCommandLineOption(nextArgument) {
                     sanitizedArguments.append(
@@ -102,6 +120,15 @@ enum ProcessContextSanitizer {
         else { return true }
         let range = NSRange(argument.startIndex..., in: argument)
         return expression.firstMatch(in: argument, range: range) != nil
+    }
+
+    private static func isAuthorizationCommandLineOption(
+        _ argument: String
+    ) -> Bool {
+        argument.range(
+            of: "authorization",
+            options: .caseInsensitive
+        ) != nil
     }
 
     private static func looksLikeCommandLineOption(_ argument: String) -> Bool {

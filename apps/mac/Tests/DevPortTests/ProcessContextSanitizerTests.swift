@@ -107,6 +107,117 @@ final class ProcessContextSanitizerTests: XCTestCase {
         XCTAssertTrue(value.contains("--port 3000"))
     }
 
+    func testSanitizeCommandRedactsSplitBearerCredentialInAuthorizationContext() {
+        let credential = "abc.def.ghi"
+        let arguments = [
+            "app", "--authorization", "Bearer", credential,
+            "--port", "3000", "SampleProject",
+        ]
+
+        let first = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+        let repeated = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(
+            first,
+            "app --authorization=[REDACTED] --port 3000 SampleProject"
+        )
+        XCTAssertFalse(first.contains(credential))
+        XCTAssertEqual(first, repeated)
+        XCTAssertEqual(ProcessContextSanitizer.sanitize(first).text, first)
+    }
+
+    func testSanitizeCommandPreservesMissingBearerCredentialAndSafeFlag() {
+        let arguments = [
+            "app", "--authorization", "Bearer", "--port", "3000",
+        ]
+
+        let value = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(value, arguments.joined(separator: " "))
+        XCTAssertTrue(value.contains("Bearer --port 3000"))
+    }
+
+    func testSanitizeCommandPreservesUnrelatedBearerArguments() {
+        let arguments = [
+            "app", "Bearer", "abc.def.ghi", "--port", "3000",
+        ]
+
+        let value = ProcessContextSanitizer.sanitizeCommand(arguments: arguments)
+
+        XCTAssertEqual(value, arguments.joined(separator: " "))
+    }
+
+    func testDevServerRedactsSplitBearerCredentialAndPreservesRawCommand() {
+        let processID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let credential = "abc.def.ghi"
+        let arguments = [
+            "app", "--authorization", "Bearer", credential,
+            "--port", "3000", "SampleProject",
+        ]
+        let details = ProcessDetails(
+            pid: processID,
+            parentPID: processID,
+            executablePath: "/usr/local/bin/app",
+            arguments: arguments,
+            workingDirectory: "/tmp/SampleProject",
+            startTime: nil
+        )
+        let server = DevServer(
+            listener: ListeningPort(port: 3000, pid: processID),
+            details: details,
+            project: ProjectInfo(
+                name: "SampleProject",
+                rootPath: "/tmp/SampleProject",
+                framework: .vite
+            )
+        )
+
+        let value = server.sanitizedAgentContext.text
+
+        XCTAssertEqual(server.command, arguments.joined(separator: " "))
+        XCTAssertTrue(server.rawAgentContext.contains(credential))
+        XCTAssertFalse(value.contains(credential))
+        XCTAssertTrue(
+            value.contains(
+                "command: app --authorization=[REDACTED] " +
+                "--port 3000 SampleProject"
+            )
+        )
+        XCTAssertTrue(value.contains("projectName: SampleProject"))
+        XCTAssertTrue(value.contains("framework: Vite"))
+        XCTAssertTrue(value.contains("port: 3000"))
+    }
+
+    func testDevServerPreservesMissingBearerCredentialAndRawCommand() {
+        let processID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let arguments = [
+            "app", "--authorization", "Bearer", "--port", "3000",
+        ]
+        let details = ProcessDetails(
+            pid: processID,
+            parentPID: processID,
+            executablePath: "/usr/local/bin/app",
+            arguments: arguments,
+            workingDirectory: "/tmp/SampleProject",
+            startTime: nil
+        )
+        let server = DevServer(
+            listener: ListeningPort(port: 3000, pid: processID),
+            details: details,
+            project: nil
+        )
+
+        let value = server.sanitizedAgentContext.text
+
+        XCTAssertEqual(server.command, arguments.joined(separator: " "))
+        XCTAssertTrue(
+            value.contains(
+                "command: app --authorization Bearer --port 3000"
+            )
+        )
+        XCTAssertTrue(value.contains("port: 3000"))
+    }
+
     func testRedactsAdditionalGitHubCredentialPrefixes() {
         let credentials = ["gho_", "ghu_", "ghs_", "ghr_"].map {
             $0 + "1234567890Synthetic"
