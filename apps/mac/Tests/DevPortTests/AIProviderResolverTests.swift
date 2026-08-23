@@ -6,18 +6,26 @@ private struct ProviderSpySnapshot: Equatable, Sendable {
     let availabilityModelIDs: [String?]
     let conversationCalls: Int
     let conversationModelIDs: [String?]
+    let conversationContexts: [SanitizedProcessContext]
 }
 
 private actor ProviderSpy: LocalAIProvider {
     nonisolated let id: LocalAIProviderID
 
     private let result: LocalAIAvailability
+    private let conversationProviderID: LocalAIProviderID
     private var availabilityModelIDs: [String?] = []
     private var conversationModelIDs: [String?] = []
+    private var conversationContexts: [SanitizedProcessContext] = []
 
-    init(id: LocalAIProviderID, result: LocalAIAvailability) {
+    init(
+        id: LocalAIProviderID,
+        result: LocalAIAvailability,
+        conversationProviderID: LocalAIProviderID? = nil
+    ) {
         self.id = id
         self.result = result
+        self.conversationProviderID = conversationProviderID ?? id
     }
 
     func availability(modelID: String?) async -> LocalAIAvailability {
@@ -30,7 +38,8 @@ private actor ProviderSpy: LocalAIProvider {
         modelID: String?
     ) async throws -> any LocalAIConversation {
         conversationModelIDs.append(modelID)
-        return ConversationStub(providerID: id)
+        conversationContexts.append(context)
+        return ConversationStub(providerID: conversationProviderID)
     }
 
     func snapshot() -> ProviderSpySnapshot {
@@ -38,7 +47,8 @@ private actor ProviderSpy: LocalAIProvider {
             availabilityCalls: availabilityModelIDs.count,
             availabilityModelIDs: availabilityModelIDs,
             conversationCalls: conversationModelIDs.count,
-            conversationModelIDs: conversationModelIDs
+            conversationModelIDs: conversationModelIDs,
+            conversationContexts: conversationContexts
         )
     }
 }
@@ -54,8 +64,107 @@ private actor ConversationStub: LocalAIConversation {
     func close() async {}
 }
 
+private actor ControlledAvailabilityProvider: LocalAIProvider {
+    nonisolated let id: LocalAIProviderID
+
+    private var didStartAvailability = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var availabilityContinuation:
+        CheckedContinuation<LocalAIAvailability, Never>?
+    private var conversationCalls = 0
+
+    init(id: LocalAIProviderID) {
+        self.id = id
+    }
+
+    func availability(modelID: String?) async -> LocalAIAvailability {
+        didStartAvailability = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+
+        return await withCheckedContinuation { continuation in
+            availabilityContinuation = continuation
+        }
+    }
+
+    func makeConversation(
+        context: SanitizedProcessContext,
+        modelID: String?
+    ) async throws -> any LocalAIConversation {
+        conversationCalls += 1
+        return ConversationStub(providerID: id)
+    }
+
+    func waitUntilAvailabilityStarts() async {
+        guard !didStartAvailability else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func completeAvailability(with result: LocalAIAvailability) {
+        availabilityContinuation?.resume(returning: result)
+        availabilityContinuation = nil
+    }
+
+    func conversationCallCount() -> Int { conversationCalls }
+}
+
 final class AIProviderResolverTests: XCTestCase {
     private let context = SanitizedProcessContext(text: "port: 3000")
+
+    func testCancellationAfterAvailabilityProbeSkipsConversationCreation() async {
+        let apple = ControlledAvailabilityProvider(id: .apple)
+        let ollama = ProviderSpy(id: .ollama, result: .available)
+        let resolver = AIProviderResolver(apple: apple, ollama: ollama)
+        let context = context
+        let resolution = Task {
+            try await resolver.resolve(
+                preference: .automatic,
+                ollamaModelID: "qwen3:4b",
+                context: context
+            )
+        }
+
+        await apple.waitUntilAvailabilityStarts()
+        resolution.cancel()
+        await apple.completeAvailability(with: .available)
+
+        do {
+            _ = try await resolution.value
+            XCTFail("Expected cancellation to stop resolution")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        let appleConversationCalls = await apple.conversationCallCount()
+        let ollamaSnapshot = await ollama.snapshot()
+        XCTAssertEqual(appleConversationCalls, 0)
+        XCTAssertEqual(ollamaSnapshot.availabilityCalls, 0)
+        XCTAssertEqual(ollamaSnapshot.conversationCalls, 0)
+    }
+
+    func testResolvedProviderIdentityComesFromConversation() async throws {
+        let apple = ProviderSpy(
+            id: .apple,
+            result: .available,
+            conversationProviderID: .ollama
+        )
+        let ollama = ProviderSpy(id: .ollama, result: .available)
+        let resolver = AIProviderResolver(apple: apple, ollama: ollama)
+
+        let resolved = try await resolver.resolve(
+            preference: .automatic,
+            ollamaModelID: "qwen3:4b",
+            context: context
+        )
+
+        XCTAssertEqual(resolved.providerID, .ollama)
+        XCTAssertEqual(resolved.badgeText, "Ollama · Local")
+    }
 
     func testAutomaticPrefersAppleWithoutProbingOllama() async throws {
         let apple = ProviderSpy(id: .apple, result: .available)
@@ -151,7 +260,10 @@ final class AIProviderResolverTests: XCTestCase {
         XCTAssertEqual(appleSnapshot.availabilityCalls, 0)
         XCTAssertEqual(appleSnapshot.conversationCalls, 0)
         XCTAssertEqual(ollamaSnapshot.availabilityCalls, 1)
+        XCTAssertEqual(ollamaSnapshot.availabilityModelIDs, ["qwen3:4b"])
         XCTAssertEqual(ollamaSnapshot.conversationCalls, 1)
+        XCTAssertEqual(ollamaSnapshot.conversationModelIDs, ["qwen3:4b"])
+        XCTAssertEqual(ollamaSnapshot.conversationContexts, [context])
     }
 
     func testAutomaticSurfacesOllamaErrorWhenNeitherProviderIsAvailable() async {

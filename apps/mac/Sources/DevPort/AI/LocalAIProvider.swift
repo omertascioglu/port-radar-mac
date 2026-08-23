@@ -57,8 +57,8 @@ protocol LocalAIProvider: Sendable {
 }
 
 struct ResolvedLocalAIConversation: Sendable {
-    let providerID: LocalAIProviderID
     let conversation: any LocalAIConversation
 
+    var providerID: LocalAIProviderID { conversation.providerID }
     var badgeText: String { providerID.badgeText }
 }

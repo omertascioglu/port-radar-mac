@@ -9,7 +9,10 @@ struct AIProviderResolver: Sendable {
     ) async throws -> ResolvedLocalAIConversation {
         switch preference {
         case .automatic:
-            if case .available = await apple.availability(modelID: nil) {
+            if case .available = try await checkedAvailability(
+                of: apple,
+                modelID: nil
+            ) {
                 return try await make(apple, context: context, modelID: nil)
             }
             return try await require(
@@ -33,7 +36,7 @@ struct AIProviderResolver: Sendable {
         context: SanitizedProcessContext,
         modelID: String?
     ) async throws -> ResolvedLocalAIConversation {
-        switch await provider.availability(modelID: modelID) {
+        switch try await checkedAvailability(of: provider, modelID: modelID) {
         case .available:
             return try await make(
                 provider,
@@ -45,13 +48,22 @@ struct AIProviderResolver: Sendable {
         }
     }
 
+    private func checkedAvailability(
+        of provider: any LocalAIProvider,
+        modelID: String?
+    ) async throws -> LocalAIAvailability {
+        try Task.checkCancellation()
+        let availability = await provider.availability(modelID: modelID)
+        try Task.checkCancellation()
+        return availability
+    }
+
     private func make(
         _ provider: any LocalAIProvider,
         context: SanitizedProcessContext,
         modelID: String?
     ) async throws -> ResolvedLocalAIConversation {
         ResolvedLocalAIConversation(
-            providerID: provider.id,
             conversation: try await provider.makeConversation(
                 context: context,
                 modelID: modelID
