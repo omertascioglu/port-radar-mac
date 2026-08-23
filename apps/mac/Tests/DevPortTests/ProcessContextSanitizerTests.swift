@@ -2,6 +2,32 @@ import XCTest
 @testable import DevPort
 
 final class ProcessContextSanitizerTests: XCTestCase {
+    func testValuelessSensitiveCLIOptionDoesNotConsumeNextLine() {
+        let raw = """
+        command: app --token
+        framework: Vite
+        projectName: SampleProject
+        port: 3000
+        """
+
+        let value = ProcessContextSanitizer.sanitize(raw).text
+
+        XCTAssertEqual(value, raw)
+    }
+
+    func testValuelessBearerDoesNotConsumeNextLine() {
+        let raw = """
+        Authorization: Bearer
+        framework: Vite
+        projectName: SampleProject
+        port: 3000
+        """
+
+        let value = ProcessContextSanitizer.sanitize(raw).text
+
+        XCTAssertEqual(value, raw)
+    }
+
     func testDevServerBuildsRawAndSanitizedProviderNeutralContexts() {
         let processID = Int32(ProcessInfo.processInfo.processIdentifier)
         let listener = ListeningPort(port: 3000, pid: processID)

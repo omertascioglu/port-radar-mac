@@ -10,8 +10,9 @@ enum ProcessContextSanitizer {
         let environmentAssignment =
             #"(?i)(^|\s)((?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z_][A-Za-z0-9_-]*)=([^\s]+)"#
         let commandLineOption =
-            #"(?i)(--(?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z0-9][A-Za-z0-9_-]*)(?:=|\s+)([^\s]+)"#
-        let bearerCredential = #"(?i)(\bBearer)\s+[A-Za-z0-9._~+/=-]+"#
+            #"(?i)(--(?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z0-9][A-Za-z0-9_-]*)(?:=|[^\S\r\n]+)([^\s]+)"#
+        let bearerCredential =
+            #"(?i)(\bBearer)[^\S\r\n]+[A-Za-z0-9._~+/=-]+"#
         let urlUserInfo = #"(?i)(https?://)[^/\s:@]+:[^@\s/]+@"#
         let sensitiveQueryParameter =
             #"(?i)([?&](?=[A-Za-z0-9_.-]*\#(sensitiveName))[A-Za-z0-9_.-]+=)[^&#\s]+"#
