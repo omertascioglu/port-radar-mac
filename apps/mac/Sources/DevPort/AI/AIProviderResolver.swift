@@ -71,3 +71,12 @@ struct AIProviderResolver: Sendable {
         )
     }
 }
+
+extension AIProviderResolver {
+    static var live: Self {
+        Self(
+            apple: AppleFoundationModelProvider(),
+            ollama: OllamaProvider()
+        )
+    }
+}

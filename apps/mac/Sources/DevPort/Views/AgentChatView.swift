@@ -1,9 +1,5 @@
 import SwiftUI
 
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
-
 struct AgentMessage: Identifiable, Equatable {
     enum Role: Equatable {
         case user
@@ -22,7 +18,7 @@ struct AgentChatModal: View {
     let server: DevServer
     let onDismiss: () -> Void
 
-    @State private var session: LanguageModelSession?
+    @State private var conversation: (any LocalAIConversation)?
     @State private var messages: [AgentMessage] = []
     @State private var draft = ""
     @State private var isSending = false
@@ -65,7 +61,7 @@ struct AgentChatModal: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            Button(action: onDismiss) {
+            Button(action: close) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
             }
@@ -84,7 +80,7 @@ struct AgentChatModal: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
-            Button("Close", action: onDismiss)
+            Button("Close", action: close)
                 .keyboardShortcut(.cancelAction)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -179,24 +175,34 @@ struct AgentChatModal: View {
     }
 
     private func bootstrap() {
-        switch ProcessAgent.availability {
-        case .available:
-            session = ProcessAgent.makeSession(for: server)
-            messages = [
-                AgentMessage(
-                    role: .system,
-                    text: "Apple Intelligence has this process’s port, PID, command, and project context. Ask anything about it."
-                )
-            ]
-            inputFocused = true
-        case .unavailable(let message):
-            availabilityNote = message
+        Task { @MainActor in
+            let provider = AppleFoundationModelProvider()
+            switch await provider.availability(modelID: nil) {
+            case .available:
+                do {
+                    conversation = try await provider.makeConversation(
+                        context: server.sanitizedAgentContext,
+                        modelID: nil
+                    )
+                    messages = [
+                        AgentMessage(
+                            role: .system,
+                            text: "Apple Intelligence has this process’s port, PID, command, and project context. Ask anything about it."
+                        )
+                    ]
+                    inputFocused = true
+                } catch {
+                    availabilityNote = error.localizedDescription
+                }
+            case .unavailable(let error):
+                availabilityNote = error.localizedDescription
+            }
         }
     }
 
     private func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, let session, !prompt.isEmpty else { return }
+        guard canSend, let conversation, !prompt.isEmpty else { return }
         draft = ""
         messages.append(AgentMessage(role: .user, text: prompt))
         isSending = true
@@ -204,14 +210,23 @@ struct AgentChatModal: View {
         Task { @MainActor in
             defer { isSending = false }
             do {
-                let response = try await session.respond(to: prompt)
-                messages.append(AgentMessage(role: .assistant, text: response.content))
+                let response = try await conversation.respond(to: prompt)
+                messages.append(AgentMessage(role: .assistant, text: response))
             } catch {
                 messages.append(AgentMessage(
                     role: .system,
                     text: error.localizedDescription
                 ))
             }
+        }
+    }
+
+    private func close() {
+        let activeConversation = conversation
+        conversation = nil
+        Task { @MainActor in
+            await activeConversation?.close()
+            onDismiss()
         }
     }
 

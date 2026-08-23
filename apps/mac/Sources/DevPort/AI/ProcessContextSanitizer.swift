@@ -157,3 +157,71 @@ enum ProcessContextSanitizer {
         )
     }
 }
+
+extension DevServer {
+    /// Provider-neutral process snapshot before sensitive values are removed.
+    var rawAgentContext: String {
+        agentContext(command: command)
+    }
+
+    /// Process snapshot safe to share with either local AI provider.
+    var sanitizedAgentContext: SanitizedProcessContext {
+        guard let commandArguments, !commandArguments.isEmpty else {
+            return ProcessContextSanitizer.sanitize(rawAgentContext)
+        }
+        let safeCommand = ProcessContextSanitizer.sanitizeCommand(
+            arguments: commandArguments
+        )
+        return SanitizedProcessContext(
+            text: agentContext(
+                command: safeCommand,
+                preservingSanitizedCommand: true
+            )
+        )
+    }
+
+    private func agentContext(
+        command commandSnapshot: String?,
+        preservingSanitizedCommand: Bool = false
+    ) -> String {
+        var lines: [String] = [
+            "port: \(port)",
+            "url: http://localhost:\(port)",
+            "pid: \(pid)",
+            "processName: \(processName)",
+            "isSystemProcess: \(isSystemProcess)",
+            "isOrphaned: \(isOrphaned)",
+        ]
+        if let parentPID {
+            lines.append("parentPID: \(parentPID)")
+        }
+        if let executablePath {
+            lines.append("executablePath: \(executablePath)")
+        }
+        if let workingDirectory {
+            lines.append("workingDirectory: \(workingDirectory)")
+        }
+        var commandLineIndex: Int?
+        if let commandSnapshot {
+            commandLineIndex = lines.count
+            lines.append("command: \(commandSnapshot)")
+        }
+        if let startTime {
+            lines.append("startTime: \(startTime.formatted(date: .abbreviated, time: .standard))")
+            if let uptime = formattedUptime() {
+                lines.append("uptime: \(uptime)")
+            }
+        }
+        if let project {
+            lines.append("projectName: \(project.name)")
+            lines.append("projectRoot: \(project.rootPath)")
+            lines.append("framework: \(project.framework.rawValue)")
+        }
+        if preservingSanitizedCommand {
+            for index in lines.indices where index != commandLineIndex {
+                lines[index] = ProcessContextSanitizer.sanitize(lines[index]).text
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
