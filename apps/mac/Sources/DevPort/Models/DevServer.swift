@@ -6,6 +6,7 @@ struct DevServer: Identifiable, Sendable {
     let pid: Int32
     let parentPID: Int32?
     let command: String?
+    let commandArguments: [String]?
     let executablePath: String?
     let workingDirectory: String?
     let startTime: Date?
@@ -74,6 +75,7 @@ struct DevServer: Identifiable, Sendable {
         self.pid = listener.pid
         self.parentPID = details?.parentPID
         self.command = details?.command
+        self.commandArguments = details?.arguments
         self.executablePath = details?.executablePath
         self.workingDirectory = details?.workingDirectory
         self.startTime = details?.startTime

@@ -51,6 +51,25 @@ enum ProcessAgent {
 extension DevServer {
     /// Provider-neutral process snapshot before sensitive values are removed.
     var rawAgentContext: String {
+        agentContext(command: command)
+    }
+
+    /// Process snapshot safe to share with either local AI provider.
+    var sanitizedAgentContext: SanitizedProcessContext {
+        let safeCommand: String?
+        if let commandArguments, !commandArguments.isEmpty {
+            safeCommand = ProcessContextSanitizer.sanitizeCommand(
+                arguments: commandArguments
+            )
+        } else {
+            safeCommand = command
+        }
+        return ProcessContextSanitizer.sanitize(
+            agentContext(command: safeCommand)
+        )
+    }
+
+    private func agentContext(command commandSnapshot: String?) -> String {
         var lines: [String] = [
             "port: \(port)",
             "url: http://localhost:\(port)",
@@ -68,8 +87,8 @@ extension DevServer {
         if let workingDirectory {
             lines.append("workingDirectory: \(workingDirectory)")
         }
-        if let command {
-            lines.append("command: \(command)")
+        if let commandSnapshot {
+            lines.append("command: \(commandSnapshot)")
         }
         if let startTime {
             lines.append("startTime: \(startTime.formatted(date: .abbreviated, time: .standard))")
@@ -83,10 +102,5 @@ extension DevServer {
             lines.append("framework: \(project.framework.rawValue)")
         }
         return lines.joined(separator: "\n")
-    }
-
-    /// Process snapshot safe to share with either local AI provider.
-    var sanitizedAgentContext: SanitizedProcessContext {
-        ProcessContextSanitizer.sanitize(rawAgentContext)
     }
 }

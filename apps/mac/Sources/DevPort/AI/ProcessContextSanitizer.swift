@@ -13,25 +13,26 @@ enum ProcessContextSanitizer {
             #"(?i)(--(?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z0-9][A-Za-z0-9_-]*)(?:=|[^\S\r\n]+)([^\s]+)"#
         let bearerCredential =
             #"(?i)(\bBearer)[^\S\r\n]+[A-Za-z0-9._~+/=-]+"#
-        let urlUserInfo = #"(?i)(https?://)[^/\s:@]+:[^@\s/]+@"#
+        let urlUserInfo =
+            #"(?i)(\b[A-Za-z][A-Za-z0-9+.-]*://)[^/\s@?#]+@"#
         let sensitiveQueryParameter =
             #"(?i)([?&](?=[A-Za-z0-9_.-]*\#(sensitiveName))[A-Za-z0-9_.-]+=)[^&#\s]+"#
         let highConfidenceCredential =
-            #"\b(?:ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[A-Za-z0-9]+-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9_-]{12,})\b"#
+            #"\b(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[A-Za-z0-9]+-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9_-]{12,})\b"#
         var value = replacing(
-            environmentAssignment,
+            bearerCredential,
             in: raw,
+            with: "$1 \(redactionMarker)"
+        )
+        value = replacing(
+            environmentAssignment,
+            in: value,
             with: "$1$2=\(redactionMarker)"
         )
         value = replacing(
             commandLineOption,
             in: value,
             with: "$1=\(redactionMarker)"
-        )
-        value = replacing(
-            bearerCredential,
-            in: value,
-            with: "$1 \(redactionMarker)"
         )
         value = replacing(
             urlUserInfo,
@@ -49,6 +50,29 @@ enum ProcessContextSanitizer {
             with: redactionMarker
         )
         return SanitizedProcessContext(text: value)
+    }
+
+    static func sanitizeCommand(arguments: [String]) -> String {
+        let sanitizedArguments = arguments.map(sanitizeCommandArgument)
+        return sanitize(sanitizedArguments.joined(separator: " ")).text
+    }
+
+    private static func sanitizeCommandArgument(_ argument: String) -> String {
+        let environmentAssignment =
+            #"(?i)^((?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z_][A-Za-z0-9_-]*=)[\s\S]*$"#
+        let commandLineOption =
+            #"(?i)^(--(?=[A-Za-z0-9_-]*\#(sensitiveName))[A-Za-z0-9][A-Za-z0-9_-]*)(?:=|[^\S\r\n]+)[\s\S]*$"#
+        var value = replacing(
+            environmentAssignment,
+            in: argument,
+            with: "$1\(redactionMarker)"
+        )
+        value = replacing(
+            commandLineOption,
+            in: value,
+            with: "$1=\(redactionMarker)"
+        )
+        return value
     }
 
     private static func replacing(

@@ -2,6 +2,118 @@ import XCTest
 @testable import DevPort
 
 final class ProcessContextSanitizerTests: XCTestCase {
+    func testRedactsAdditionalGitHubCredentialPrefixes() {
+        let credentials = ["gho_", "ghu_", "ghs_", "ghr_"].map {
+            $0 + "1234567890Synthetic"
+        }
+        let raw = """
+        command: helper \(credentials.joined(separator: " ")) --port 3000
+        projectName: SampleProject
+        framework: Node
+        """
+
+        let value = ProcessContextSanitizer.sanitize(raw).text
+
+        for credential in credentials {
+            XCTAssertFalse(value.contains(credential))
+        }
+        XCTAssertEqual(value.components(separatedBy: "[REDACTED]").count - 1, 4)
+        XCTAssertTrue(value.contains("--port 3000"))
+        XCTAssertTrue(value.contains("projectName: SampleProject"))
+        XCTAssertTrue(value.contains("framework: Node"))
+    }
+
+    func testRedactsGeneralURLUserInfoWithoutCorruptingSafeURLs() {
+        let raw = """
+        database: postgres://dbuser:synthetic-db-pass@db.example.test/app
+        cache: redis://synthetic-cache-token@cache.example.test/0
+        document: mongodb+srv://mongo-user:synthetic-mongo-pass@cluster.example.test/db
+        private: https://synthetic-token-only@example.test/private
+        safe: https://example.test/public
+        safePath: https://example.test/users/name@example.test
+        safeQuery: https://example.test/search?email=name@example.test
+        """
+        let expected = """
+        database: postgres://[REDACTED]@db.example.test/app
+        cache: redis://[REDACTED]@cache.example.test/0
+        document: mongodb+srv://[REDACTED]@cluster.example.test/db
+        private: https://[REDACTED]@example.test/private
+        safe: https://example.test/public
+        safePath: https://example.test/users/name@example.test
+        safeQuery: https://example.test/search?email=name@example.test
+        """
+
+        let value = ProcessContextSanitizer.sanitize(raw).text
+
+        XCTAssertEqual(value, expected)
+        XCTAssertFalse(value.contains("synthetic-db-pass"))
+        XCTAssertFalse(value.contains("synthetic-cache-token"))
+        XCTAssertFalse(value.contains("synthetic-mongo-pass"))
+        XCTAssertFalse(value.contains("synthetic-token-only"))
+    }
+
+    func testDevServerSanitizesWholeSensitiveArgvElementBeforeJoining() {
+        let processID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let secretArgument = "API_KEY=" + "synthetic-head synthetic-tail"
+        let details = ProcessDetails(
+            pid: processID,
+            parentPID: processID,
+            executablePath: "/opt/homebrew/bin/node",
+            arguments: [
+                "node", "app.js", secretArgument, "--host", "localhost",
+                "--port", "3000", "SampleProject",
+            ],
+            workingDirectory: "/tmp/SampleProject",
+            startTime: nil
+        )
+        let server = DevServer(
+            listener: ListeningPort(port: 3000, pid: processID),
+            details: details,
+            project: ProjectInfo(
+                name: "SampleProject",
+                rootPath: "/tmp/SampleProject",
+                framework: .vite
+            )
+        )
+
+        let value = server.sanitizedAgentContext.text
+
+        XCTAssertFalse(value.contains("synthetic-head"))
+        XCTAssertFalse(value.contains("synthetic-tail"))
+        XCTAssertTrue(
+            value.contains(
+                "command: node app.js API_KEY=[REDACTED] " +
+                "--host localhost --port 3000 SampleProject"
+            )
+        )
+        XCTAssertTrue(value.contains("projectName: SampleProject"))
+        XCTAssertTrue(value.contains("framework: Vite"))
+        XCTAssertTrue(value.contains("port: 3000"))
+        XCTAssertEqual(
+            server.rawAgentContext.contains(secretArgument),
+            true
+        )
+    }
+
+    func testAuthorizationOptionRedactsWholeBearerCredential() {
+        let credential = "abc.def.ghi"
+        let raw = """
+        command: app --authorization Bearer \(credential)
+        framework: Vite
+        projectName: SampleProject
+        port: 3000
+        """
+
+        let once = ProcessContextSanitizer.sanitize(raw)
+        let twice = ProcessContextSanitizer.sanitize(once.text)
+
+        XCTAssertFalse(once.text.contains(credential))
+        XCTAssertTrue(once.text.contains("framework: Vite"))
+        XCTAssertTrue(once.text.contains("projectName: SampleProject"))
+        XCTAssertTrue(once.text.contains("port: 3000"))
+        XCTAssertEqual(once, twice)
+    }
+
     func testValuelessSensitiveCLIOptionDoesNotConsumeNextLine() {
         let raw = """
         command: app --token
