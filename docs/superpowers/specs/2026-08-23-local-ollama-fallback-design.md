@@ -1,7 +1,7 @@
 # Local Ollama Fallback Design
 
 Date: 2026-08-23
-Status: Proposed
+Status: Approved
 Target: Port Radar for macOS
 Upstream baseline: 0f4019de0fe64957411a155b81019ff20d0cbab9
 
@@ -285,7 +285,7 @@ only in view/conversation memory and are released when the modal closes.
 
 The Ollama client uses an ephemeral URLSession configuration with caches,
 cookies, and credential storage disabled. Port Radar adds no request or response
-body logging.
+body logging, and the client disables proxy routing for these loopback calls.
 
 ### Network boundary
 
