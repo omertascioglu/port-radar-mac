@@ -67,6 +67,18 @@ final class OllamaRedirectDelegate:
     ) {
         completionHandler(.cancelAuthenticationChallenge, nil)
     }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
 }
 
 enum OllamaSessionFactory {

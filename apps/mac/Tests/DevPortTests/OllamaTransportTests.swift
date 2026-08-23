@@ -162,30 +162,29 @@ final class OllamaTransportTests: XCTestCase {
     }
 
     func testRedirectDelegateCancelsAuthenticationChallenges() async {
-        let protectionSpace = URLProtectionSpace(
-            host: "127.0.0.1",
-            port: 11434,
-            protocol: "http",
-            realm: nil,
-            authenticationMethod: NSURLAuthenticationMethodHTTPBasic
-        )
-        let challenge = URLAuthenticationChallenge(
-            protectionSpace: protectionSpace,
-            proposedCredential: URLCredential(
-                user: "unexpected",
-                password: "credential",
-                persistence: .none
-            ),
-            previousFailureCount: 0,
-            failureResponse: nil,
-            error: nil,
-            sender: AuthenticationChallengeSenderStub()
-        )
-
         let result = await withCheckedContinuation { continuation in
             OllamaRedirectDelegate().urlSession(
                 URLSession(configuration: .ephemeral),
-                didReceive: challenge
+                didReceive: authenticationChallenge()
+            ) { disposition, credential in
+                continuation.resume(returning: (disposition, credential))
+            }
+        }
+
+        XCTAssertEqual(result.0, .cancelAuthenticationChallenge)
+        XCTAssertNil(result.1)
+    }
+
+    func testRedirectDelegateCancelsTaskAuthenticationChallenges() async {
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.dataTask(with: URL(string:
+            "http://127.0.0.1:11434/api/chat")!)
+
+        let result = await withCheckedContinuation { continuation in
+            OllamaRedirectDelegate().urlSession(
+                session,
+                task: task,
+                didReceive: authenticationChallenge()
             ) { disposition, credential in
                 continuation.resume(returning: (disposition, credential))
             }
@@ -363,5 +362,26 @@ final class OllamaTransportTests: XCTestCase {
                 continuation.resume(returning: request)
             }
         }
+    }
+
+    private func authenticationChallenge() -> URLAuthenticationChallenge {
+        URLAuthenticationChallenge(
+            protectionSpace: URLProtectionSpace(
+                host: "127.0.0.1",
+                port: 11434,
+                protocol: "http",
+                realm: nil,
+                authenticationMethod: NSURLAuthenticationMethodHTTPBasic
+            ),
+            proposedCredential: URLCredential(
+                user: "unexpected",
+                password: "credential",
+                persistence: .none
+            ),
+            previousFailureCount: 0,
+            failureResponse: nil,
+            error: nil,
+            sender: AuthenticationChallengeSenderStub()
+        )
     }
 }
