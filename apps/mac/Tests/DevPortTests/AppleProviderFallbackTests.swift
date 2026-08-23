@@ -240,6 +240,59 @@ final class AppleProviderFallbackTests: XCTestCase {
         XCTAssertEqual(snapshot.closeCount, 1)
     }
 
+    func testQueuedCancellationReturnsBeforeActiveResponseAndPreservesProgress() async throws {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let active = Task {
+            try await conversation.respond(to: "Active")
+        }
+        await session.waitUntilResponseCount(1)
+
+        let queuedStarted = expectation(description: "queued caller started")
+        let queuedFinished = expectation(
+            description: "queued cancellation returned"
+        )
+        let canceled = Task {
+            queuedStarted.fulfill()
+            defer { queuedFinished.fulfill() }
+            return try await conversation.respond(to: "Canceled")
+        }
+        await fulfillment(of: [queuedStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+        canceled.cancel()
+
+        await fulfillment(of: [queuedFinished], timeout: 1)
+        var snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["Active"])
+        XCTAssertEqual(snapshot.activeResponses, 1)
+
+        let survivor = Task {
+            try await conversation.respond(to: "Survivor")
+        }
+        await session.completeNextResponse("Active answer")
+        let activeAnswer = try await active.value
+        XCTAssertEqual(activeAnswer, "Active answer")
+
+        do {
+            _ = try await canceled.value
+            XCTFail("Expected queued cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        await session.waitUntilResponseCount(2)
+        snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["Active", "Survivor"])
+        XCTAssertEqual(snapshot.maximumConcurrentResponses, 1)
+
+        await session.completeNextResponse("Survivor answer")
+        let survivorAnswer = try await survivor.value
+        XCTAssertEqual(survivorAnswer, "Survivor answer")
+        await conversation.close()
+    }
+
     #if !canImport(FoundationModels)
     func testAppleProviderIsUnavailableWithoutFramework() async {
         let availability = await AppleFoundationModelProvider().availability(

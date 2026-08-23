@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -45,13 +46,129 @@ protocol AppleModelSession: Sendable {
     func close() async
 }
 
+private final class AppleResponseTurnGate: Sendable {
+    private enum Registration {
+        case registering
+        case canceled
+    }
+
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+
+    private struct State {
+        var isClosed = false
+        var isHeld = false
+        // Keeps cancellation from being lost before a continuation is queued.
+        var registrations: [UUID: Registration] = [:]
+        var waiters: [Waiter] = []
+    }
+
+    private enum Admission {
+        case acquired
+        case queued
+        case rejected
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func acquire() async throws {
+        let id = UUID()
+        try Task.checkCancellation()
+        state.withLock { state in
+            state.registrations[id] = .registering
+        }
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let admission = state.withLock { state -> Admission in
+                    let registration = state.registrations.removeValue(
+                        forKey: id
+                    )
+                    guard !state.isClosed,
+                          registration == .registering,
+                          !Task.isCancelled
+                    else {
+                        return .rejected
+                    }
+                    guard state.isHeld else {
+                        state.isHeld = true
+                        return .acquired
+                    }
+                    state.waiters.append(.init(
+                        id: id,
+                        continuation: continuation
+                    ))
+                    return .queued
+                }
+
+                switch admission {
+                case .acquired:
+                    continuation.resume()
+                case .queued:
+                    break
+                case .rejected:
+                    continuation.resume(throwing: CancellationError())
+                }
+            }
+        } onCancel: {
+            cancel(id: id)
+        }
+    }
+
+    func release() {
+        let continuation: CheckedContinuation<Void, any Error>? =
+            state.withLock { state in
+                guard !state.waiters.isEmpty else {
+                    state.isHeld = false
+                    return nil
+                }
+                return state.waiters.removeFirst().continuation
+            }
+        continuation?.resume()
+    }
+
+    func close() {
+        let continuations: [CheckedContinuation<Void, any Error>] =
+            state.withLock { state in
+                guard !state.isClosed else { return [] }
+                state.isClosed = true
+                state.registrations = state.registrations.mapValues { _ in
+                    .canceled
+                }
+                let continuations = state.waiters.map(\.continuation)
+                state.waiters.removeAll()
+                return continuations
+            }
+        continuations.forEach {
+            $0.resume(throwing: CancellationError())
+        }
+    }
+
+    private func cancel(id: UUID) {
+        let continuation: CheckedContinuation<Void, any Error>? =
+            state.withLock { state in
+                if let index = state.waiters.firstIndex(where: {
+                    $0.id == id
+                }) {
+                    return state.waiters.remove(at: index).continuation
+                }
+                if state.registrations[id] != nil {
+                    state.registrations[id] = .canceled
+                }
+                return nil
+            }
+        continuation?.resume(throwing: CancellationError())
+    }
+}
+
 actor AppleFoundationModelConversation: LocalAIConversation {
     nonisolated let providerID: LocalAIProviderID = .apple
 
     private var session: (any AppleModelSession)?
     private var isClosed = false
-    private var responseInProgress = false
-    private var responseWaiters: [CheckedContinuation<Void, any Error>] = []
+    private let responseTurnGate = AppleResponseTurnGate()
     private var activeRequestID: UUID?
     private var activeRequest: Task<String, any Error>?
     private var closeTask: Task<Void, Never>?
@@ -62,8 +179,8 @@ actor AppleFoundationModelConversation: LocalAIConversation {
     }
 
     func respond(to prompt: String) async throws -> String {
-        try await acquireResponseTurn()
-        defer { releaseResponseTurn() }
+        try await responseTurnGate.acquire()
+        defer { responseTurnGate.release() }
 
         try Task.checkCancellation()
         guard !isClosed, let session else { throw CancellationError() }
@@ -106,9 +223,7 @@ actor AppleFoundationModelConversation: LocalAIConversation {
         }
 
         isClosed = true
-        let waiters = responseWaiters
-        responseWaiters.removeAll()
-        waiters.forEach { $0.resume(throwing: CancellationError()) }
+        responseTurnGate.close()
 
         let request = activeRequest
         request?.cancel()
@@ -137,26 +252,6 @@ actor AppleFoundationModelConversation: LocalAIConversation {
         guard activeRequestID == requestID else { return }
         activeRequestID = nil
         activeRequest = nil
-    }
-
-    private func acquireResponseTurn() async throws {
-        guard !isClosed else { throw CancellationError() }
-        guard responseInProgress else {
-            responseInProgress = true
-            return
-        }
-
-        try await withCheckedThrowingContinuation { continuation in
-            responseWaiters.append(continuation)
-        }
-    }
-
-    private func releaseResponseTurn() {
-        guard !responseWaiters.isEmpty else {
-            responseInProgress = false
-            return
-        }
-        responseWaiters.removeFirst().resume()
     }
 }
 
