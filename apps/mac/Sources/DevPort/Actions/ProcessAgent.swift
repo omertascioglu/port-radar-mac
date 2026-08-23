@@ -1,4 +1,6 @@
 import Foundation
+
+#if canImport(FoundationModels)
 import FoundationModels
 
 /// On-device Apple Intelligence helper for answering questions about a listening process.
@@ -44,6 +46,7 @@ enum ProcessAgent {
         """
     }
 }
+#endif
 
 extension DevServer {
     /// Snapshot fed to Apple Intelligence when asking about this listener.

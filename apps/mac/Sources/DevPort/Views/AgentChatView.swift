@@ -1,5 +1,8 @@
-import FoundationModels
 import SwiftUI
+
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 struct AgentMessage: Identifiable, Equatable {
     enum Role: Equatable {
@@ -13,6 +16,7 @@ struct AgentMessage: Identifiable, Equatable {
     var text: String
 }
 
+#if canImport(FoundationModels)
 @available(macOS 26.0, *)
 struct AgentChatModal: View {
     let server: DevServer
@@ -223,6 +227,8 @@ struct AgentChatModal: View {
         }
     }
 }
+
+#endif
 
 /// Fallback when the app is running on an older macOS without Foundation Models.
 struct AgentUnavailableModal: View {

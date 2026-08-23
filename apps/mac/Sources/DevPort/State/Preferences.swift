@@ -153,3 +153,13 @@ final class Preferences {
         return .seconds(seconds)
     }
 }
+
+enum LocalAIProviderPreference: String, Equatable, Sendable {
+    case automatic
+    case apple
+    case ollama
+
+    static func persistedValue(_ rawValue: String?) -> Self {
+        rawValue.flatMap(Self.init(rawValue:)) ?? .automatic
+    }
+}
