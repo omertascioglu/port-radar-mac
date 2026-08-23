@@ -44,10 +44,14 @@ actor OllamaConversation: LocalAIConversation {
     private let client: any OllamaClientProtocol
     private let modelID: String
     private var messages: [OllamaChatMessage]
-    private var didStartRequest = false
+    private var didStartChatRequest = false
     private var isClosed = false
     private var responseInProgress = false
     private var responseWaiters: [CheckedContinuation<Void, any Error>] = []
+    private var activeRequestID: UUID?
+    private var activeRequest: Task<String, any Error>?
+    private var closeTask: Task<Void, Never>?
+    private var didFinishClose = false
 
     init(
         client: any OllamaClientProtocol,
@@ -74,31 +78,90 @@ actor OllamaConversation: LocalAIConversation {
         let candidate = messages + [
             OllamaChatMessage(role: "user", content: prompt),
         ]
-        didStartRequest = true
-        let response = try await client.chat(
-            model: modelID,
-            messages: candidate
-        )
+        let requestID = UUID()
+        let client = client
+        let modelID = modelID
+        let request = Task { [self] in
+            try Task.checkCancellation()
+            try await client.validateLocalModel(modelID)
+            try Task.checkCancellation()
+            try authorizeChatStart(requestID: requestID)
+            try Task.checkCancellation()
+            return try await client.chat(
+                model: modelID,
+                messages: candidate
+            )
+        }
+        activeRequestID = requestID
+        activeRequest = request
 
-        try Task.checkCancellation()
-        guard !isClosed else { throw CancellationError() }
-        messages = candidate + [
-            OllamaChatMessage(role: "assistant", content: response),
-        ]
-        return response
+        do {
+            let response = try await withTaskCancellationHandler {
+                try await request.value
+            } onCancel: {
+                request.cancel()
+            }
+
+            clearActiveRequest(requestID: requestID)
+            try Task.checkCancellation()
+            guard !isClosed else { throw CancellationError() }
+            messages = candidate + [
+                OllamaChatMessage(role: "assistant", content: response),
+            ]
+            return response
+        } catch {
+            clearActiveRequest(requestID: requestID)
+            if isClosed || Task.isCancelled {
+                throw CancellationError()
+            }
+            throw error
+        }
     }
 
     func close() async {
-        guard !isClosed else { return }
+        if didFinishClose { return }
+        if let closeTask {
+            await closeTask.value
+            return
+        }
+
         isClosed = true
 
         let waiters = responseWaiters
         responseWaiters.removeAll()
         waiters.forEach { $0.resume(throwing: CancellationError()) }
 
-        if didStartRequest {
-            await client.unload(model: modelID)
+        let request = activeRequest
+        request?.cancel()
+        let shouldUnload = didStartChatRequest
+        let client = client
+        let modelID = modelID
+        let cleanup = Task {
+            if let request {
+                _ = await request.result
+            }
+            if shouldUnload {
+                await client.unload(model: modelID)
+            }
         }
+        closeTask = cleanup
+        await cleanup.value
+        didFinishClose = true
+        closeTask = nil
+    }
+
+    private func authorizeChatStart(requestID: UUID) throws {
+        try Task.checkCancellation()
+        guard !isClosed, activeRequestID == requestID else {
+            throw CancellationError()
+        }
+        didStartChatRequest = true
+    }
+
+    private func clearActiveRequest(requestID: UUID) {
+        guard activeRequestID == requestID else { return }
+        activeRequestID = nil
+        activeRequest = nil
     }
 
     private func acquireResponseTurn() async throws {

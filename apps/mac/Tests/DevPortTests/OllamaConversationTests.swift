@@ -98,6 +98,229 @@ private actor OllamaClientSpy: OllamaClientProtocol {
     }
 }
 
+private struct ModelChangeClientSnapshot: Equatable, Sendable {
+    let validationModelIDs: [String]
+    let chatMessages: [[OllamaChatMessage]]
+}
+
+private actor ModelChangeClient: OllamaClientProtocol {
+    private var validationResults: [ClientValidationResult]
+    private var validationModelIDs: [String] = []
+    private var chatMessages: [[OllamaChatMessage]] = []
+
+    init(validationResults: [ClientValidationResult]) {
+        self.validationResults = validationResults
+    }
+
+    func version() async throws -> String { "test" }
+    func localModels() async throws -> [OllamaModel] { [] }
+
+    func validateLocalModel(_ id: String) async throws {
+        validationModelIDs.append(id)
+        guard !validationResults.isEmpty else {
+            throw SyntheticClientError.failed
+        }
+        switch validationResults.removeFirst() {
+        case .success:
+            return
+        case .localError(let error):
+            throw error
+        case .unknownError:
+            throw SyntheticClientError.failed
+        }
+    }
+
+    func chat(
+        model: String,
+        messages: [OllamaChatMessage]
+    ) async throws -> String {
+        chatMessages.append(messages)
+        return "Local answer"
+    }
+
+    func unload(model: String) async {}
+
+    func snapshot() -> ModelChangeClientSnapshot {
+        .init(
+            validationModelIDs: validationModelIDs,
+            chatMessages: chatMessages
+        )
+    }
+}
+
+private struct LifecycleClientSnapshot: Equatable, Sendable {
+    let validationCalls: Int
+    let chatCalls: Int
+    let validationCancellationCount: Int
+    let chatCancellationCount: Int
+    let unloadModelIDs: [String]
+}
+
+private actor ControlledChatLifecycleClient: OllamaClientProtocol {
+    private var chatCalls = 0
+    private var chatCancellationCount = 0
+    private var unloadModelIDs: [String] = []
+    private var chatContinuation: CheckedContinuation<String, any Error>?
+    private var chatStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func version() async throws -> String { "test" }
+    func localModels() async throws -> [OllamaModel] { [] }
+    func validateLocalModel(_ id: String) async throws {}
+
+    func chat(
+        model: String,
+        messages: [OllamaChatMessage]
+    ) async throws -> String {
+        chatCalls += 1
+        let waiters = chatStartWaiters
+        chatStartWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                chatContinuation = continuation
+            }
+        } onCancel: {
+            Task { await self.recordChatCancellation() }
+        }
+    }
+
+    func unload(model: String) async {
+        unloadModelIDs.append(model)
+        signalLifecycleEvent()
+    }
+
+    func waitUntilChatStarts() async {
+        guard chatCalls == 0 else { return }
+        await withCheckedContinuation { continuation in
+            chatStartWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCancellationOrUnload() async {
+        guard chatCancellationCount == 0, unloadModelIDs.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            lifecycleWaiters.append(continuation)
+        }
+    }
+
+    func completeChat(with result: Result<String, SyntheticClientError>) {
+        chatContinuation?.resume(with: result)
+        chatContinuation = nil
+    }
+
+    func snapshot() -> LifecycleClientSnapshot {
+        .init(
+            validationCalls: 0,
+            chatCalls: chatCalls,
+            validationCancellationCount: 0,
+            chatCancellationCount: chatCancellationCount,
+            unloadModelIDs: unloadModelIDs
+        )
+    }
+
+    private func recordChatCancellation() {
+        chatCancellationCount += 1
+        signalLifecycleEvent()
+    }
+
+    private func signalLifecycleEvent() {
+        let waiters = lifecycleWaiters
+        lifecycleWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
+    private var validationCalls = 0
+    private var chatCalls = 0
+    private var validationCancellationCount = 0
+    private var unloadModelIDs: [String] = []
+    private var validationContinuation: CheckedContinuation<Void, any Error>?
+    private var requestStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func version() async throws -> String { "test" }
+    func localModels() async throws -> [OllamaModel] { [] }
+
+    func validateLocalModel(_ id: String) async throws {
+        validationCalls += 1
+        signalRequestStarted()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                validationContinuation = continuation
+            }
+        } onCancel: {
+            Task { await self.recordValidationCancellation() }
+        }
+    }
+
+    func chat(
+        model: String,
+        messages: [OllamaChatMessage]
+    ) async throws -> String {
+        chatCalls += 1
+        signalRequestStarted()
+        return "Privacy boundary bypassed"
+    }
+
+    func unload(model: String) async {
+        unloadModelIDs.append(model)
+        signalLifecycleEvent()
+    }
+
+    func waitUntilAnyRequestStarts() async {
+        guard validationCalls == 0, chatCalls == 0 else { return }
+        await withCheckedContinuation { continuation in
+            requestStartWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCancellationOrUnload() async {
+        guard validationCancellationCount == 0, unloadModelIDs.isEmpty else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            lifecycleWaiters.append(continuation)
+        }
+    }
+
+    func completeValidation(
+        with result: Result<Void, SyntheticClientError>
+    ) {
+        validationContinuation?.resume(with: result)
+        validationContinuation = nil
+    }
+
+    func snapshot() -> LifecycleClientSnapshot {
+        .init(
+            validationCalls: validationCalls,
+            chatCalls: chatCalls,
+            validationCancellationCount: validationCancellationCount,
+            chatCancellationCount: 0,
+            unloadModelIDs: unloadModelIDs
+        )
+    }
+
+    private func recordValidationCancellation() {
+        validationCancellationCount += 1
+        signalLifecycleEvent()
+    }
+
+    private func signalRequestStarted() {
+        let waiters = requestStartWaiters
+        requestStartWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func signalLifecycleEvent() {
+        let waiters = lifecycleWaiters
+        lifecycleWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 final class OllamaConversationTests: XCTestCase {
     private let modelID = "qwen3:4b"
 
@@ -270,6 +493,112 @@ final class OllamaConversationTests: XCTestCase {
         _ = try await retry.value
     }
 
+    func testEveryResponseRevalidatesAndDoesNotChatAfterModelBecomesRemote() async throws {
+        let client = ModelChangeClient(validationResults: [
+            .success,
+            .localError(.remoteModelRejected),
+        ])
+        let conversation = OllamaConversation(
+            client: client,
+            modelID: modelID,
+            context: .init(text: "sanitized-only-context")
+        )
+
+        let firstAnswer = try await conversation.respond(to: "First question")
+        XCTAssertEqual(firstAnswer, "Local answer")
+
+        do {
+            _ = try await conversation.respond(to: "Blocked question")
+            XCTFail("Expected the model change to block chat")
+        } catch {
+            XCTAssertEqual(error as? LocalAIError, .remoteModelRejected)
+        }
+
+        let snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.validationModelIDs, [modelID, modelID])
+        XCTAssertEqual(snapshot.chatMessages.count, 1)
+        XCTAssertTrue(
+            snapshot.chatMessages[0].contains(where: {
+                $0.content.contains("sanitized-only-context")
+            })
+        )
+        XCTAssertFalse(
+            snapshot.chatMessages.flatMap { $0 }.contains(where: {
+                $0.content.contains("Blocked question")
+            })
+        )
+    }
+
+    func testCloseAwaitsCancelledChatBeforeUnloadingExactlyOnce() async {
+        let client = ControlledChatLifecycleClient()
+        let conversation = OllamaConversation(
+            client: client,
+            modelID: modelID,
+            context: .init(text: "port: 3000")
+        )
+        let response = Task { try await conversation.respond(to: "Question") }
+        await client.waitUntilChatStarts()
+
+        let firstClose = Task { await conversation.close() }
+        let secondClose = Task { await conversation.close() }
+        await client.waitUntilCancellationOrUnload()
+
+        var snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatCancellationCount, 1)
+        XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+
+        await client.completeChat(with: .failure(.failed))
+        await firstClose.value
+        await secondClose.value
+
+        do {
+            _ = try await response.value
+            XCTFail("Expected close to cancel the active response")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+        snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatCalls, 1)
+        XCTAssertEqual(snapshot.unloadModelIDs, [modelID])
+    }
+
+    func testCloseAwaitsCancelledValidationWithoutChatOrUnload() async {
+        let client = ControlledValidationLifecycleClient()
+        let conversation = OllamaConversation(
+            client: client,
+            modelID: modelID,
+            context: .init(text: "port: 3000")
+        )
+        let response = Task { try await conversation.respond(to: "Question") }
+        await client.waitUntilAnyRequestStarts()
+
+        let close = Task { await conversation.close() }
+        await client.waitUntilCancellationOrUnload()
+
+        var snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.validationCalls, 1)
+        XCTAssertEqual(snapshot.validationCancellationCount, 1)
+        XCTAssertEqual(snapshot.chatCalls, 0)
+        XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+
+        await client.completeValidation(with: .failure(.failed))
+        await close.value
+
+        do {
+            _ = try await response.value
+            XCTFail("Expected close to cancel in-flight validation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+        snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatCalls, 0)
+        XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+    }
+
     func testConcurrentResponsesAreSerializedAndUseCommittedHistory() async throws {
         let client = OllamaClientSpy()
         let conversation = makeConversation(client: client)
@@ -302,17 +631,23 @@ final class OllamaConversationTests: XCTestCase {
     }
 
     func testCloseDuringRequestRejectsLateResponseAndUnloadsExactlyOnce() async {
-        let client = OllamaClientSpy()
-        let conversation = makeConversation(client: client)
+        let client = ControlledChatLifecycleClient()
+        let conversation = OllamaConversation(
+            client: client,
+            modelID: modelID,
+            context: .init(text: "port: 3000")
+        )
         let response = Task { try await conversation.respond(to: "Question") }
-        await client.waitUntilChatCount(1)
+        await client.waitUntilChatStarts()
 
-        await conversation.close()
+        let close = Task { await conversation.close() }
+        await client.waitUntilCancellationOrUnload()
+        await client.completeChat(with: .success("Too late"))
+        await close.value
         await conversation.close()
 
         var snapshot = await client.snapshot()
         XCTAssertEqual(snapshot.unloadModelIDs, [modelID])
-        await client.completeNextChat(with: .success("Too late"))
         do {
             _ = try await response.value
             XCTFail("Expected the late response to be rejected")
@@ -331,7 +666,7 @@ final class OllamaConversationTests: XCTestCase {
             XCTFail("Expected CancellationError, got \(error)")
         }
         snapshot = await client.snapshot()
-        XCTAssertEqual(snapshot.chatMessages.count, 1)
+        XCTAssertEqual(snapshot.chatCalls, 1)
         XCTAssertEqual(snapshot.unloadModelIDs, [modelID])
     }
 
