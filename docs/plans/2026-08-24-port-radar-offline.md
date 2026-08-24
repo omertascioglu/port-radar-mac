@@ -287,7 +287,7 @@ protocol OllamaProcessLaunching: Sendable {
 
 The live adapter owns Foundation `Process` behind an actor and never exposes the `Process` object across isolation. Build the child environment from a minimal allowlist (`PATH`, `HOME`, `TMPDIR`, locale, model location if present), explicitly remove proxy/auth variables, then set `OLLAMA_HOST` and `OLLAMA_NO_CLOUD`. Do not copy the complete parent environment. Route output to `/dev/null`; do not create readability handlers.
 
-Use fixed dedicated port `11435` for the first implementation. If it is occupied or the child exits before readiness, fail closed with `.ollamaPrivateServiceUnavailable`; do not connect to the occupant.
+Use fixed dedicated port `11435` for the first implementation. This task maps synchronous process-launch failures to `.ollamaPrivateServiceUnavailable`. Task 5 owns the readiness boundary: it detects an occupied port or a child that exits before readiness, terminates only the owned child, and fails closed without connecting to the occupant.
 
 Map `OllamaExecutableLocatorError.notInstalled` to a new `.ollamaNotInstalled` Local AI error with bounded copy `“Ollama is not installed. Install it separately, then try again.”`. Update every exhaustive LocalAIError switch and its focused expectations in the same TDD cycle so this task leaves the full suite compiling.
 
