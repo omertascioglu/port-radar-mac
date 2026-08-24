@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.
 import Foundation
 import Observation
 
@@ -212,7 +213,9 @@ final class OllamaSettingsModel {
             return .notRunning
         case .appleUnavailable:
             return .failed("Unable to check local Ollama models.")
-        case .ollamaModelRequired,
+        case .ollamaNotInstalled,
+             .ollamaPrivateServiceUnavailable,
+             .ollamaModelRequired,
              .ollamaModelUnavailable,
              .remoteModelRejected,
              .unsafeLocalEndpoint,

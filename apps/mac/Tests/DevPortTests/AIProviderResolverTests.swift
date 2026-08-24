@@ -319,6 +319,14 @@ final class AIProviderResolverTests: XCTestCase {
     func testLocalAIErrorsHaveBoundedUserFacingDescriptions() {
         let cases: [(LocalAIError, String)] = [
             (.appleUnavailable("Apple Intelligence is disabled."), "Apple Intelligence is disabled."),
+            (
+                .ollamaNotInstalled,
+                "Ollama is not installed. Install it separately, then try again."
+            ),
+            (
+                .ollamaPrivateServiceUnavailable,
+                "Unable to start the private local Ollama service."
+            ),
             (.ollamaNotRunning, "Ollama is not running."),
             (.ollamaModelRequired, "Choose an installed local Ollama model."),
             (

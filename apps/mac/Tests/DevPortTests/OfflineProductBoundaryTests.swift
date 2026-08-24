@@ -58,6 +58,8 @@ final class OfflineProductBoundaryTests: XCTestCase {
             "Actions/LaunchAtLogin.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.",
             "AI/LocalAIError.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
             "AI/LocalAIProvider.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
+            "AI/OllamaProcess.swift": "// Modification notice: Added in 2026 for the Port Radar Offline fork.",
+            "AI/OllamaSettingsModel.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.",
             "DevPortApp.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
             "Scanner/PortScanner.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.",
             "State/AppState.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.",

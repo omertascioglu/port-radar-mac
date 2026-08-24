@@ -3,6 +3,8 @@ import Foundation
 
 enum LocalAIError: Error, Equatable, LocalizedError, Sendable {
     case appleUnavailable(String)
+    case ollamaNotInstalled
+    case ollamaPrivateServiceUnavailable
     case ollamaNotRunning
     case ollamaModelRequired
     case ollamaModelUnavailable
@@ -14,6 +16,10 @@ enum LocalAIError: Error, Equatable, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .appleUnavailable(let reason): reason
+        case .ollamaNotInstalled:
+            "Ollama is not installed. Install it separately, then try again."
+        case .ollamaPrivateServiceUnavailable:
+            "Unable to start the private local Ollama service."
         case .ollamaNotRunning: "Ollama is not running."
         case .ollamaModelRequired: "Choose an installed local Ollama model."
         case .ollamaModelUnavailable:
