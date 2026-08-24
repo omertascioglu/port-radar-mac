@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.
 import Foundation
 import Observation
 

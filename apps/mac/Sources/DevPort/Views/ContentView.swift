@@ -1,4 +1,4 @@
-// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution.
+// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.
 import SwiftUI
 
 /// Servers grouped by detected project (or System / Other buckets).
@@ -502,7 +502,7 @@ struct ServerRow: View {
         server.project?.rootPath ?? server.workingDirectory
     }
     private var showAsk: Bool { preferences.askAboutProcessEnabled }
-    private var hasMenuActions: Bool { true }
+    private var hasMenuActions: Bool { showAsk || folderPath != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
