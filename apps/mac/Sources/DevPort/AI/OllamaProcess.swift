@@ -1,7 +1,6 @@
 // Modification notice: Added in 2026 for the Port Radar Offline fork.
 import Darwin
 import Foundation
-import os
 
 struct OllamaLaunchSpec: Equatable, Sendable {
     let executableURL: URL
@@ -20,7 +19,7 @@ protocol OllamaOwnedProcess: Sendable {
 }
 
 protocol OllamaProcessLaunching: Sendable {
-    func launch(_ spec: OllamaLaunchSpec) throws -> any OllamaOwnedProcess
+    func launch(_ spec: OllamaLaunchSpec) async throws -> any OllamaOwnedProcess
 }
 
 enum OllamaProcessOutputSink: Equatable, Sendable {
@@ -28,16 +27,18 @@ enum OllamaProcessOutputSink: Equatable, Sendable {
 }
 
 protocol OllamaFoundationProcess: Sendable {
-    var processIdentifier: Int32 { get }
-    var isRunning: Bool { get }
-    func setExecutableURL(_ url: URL)
-    func setArguments(_ arguments: [String])
-    func setEnvironment(_ environment: [String: String])
-    func setStandardOutput(_ sink: OllamaProcessOutputSink)
-    func setStandardError(_ sink: OllamaProcessOutputSink)
-    func setTerminationHandler(_ handler: @escaping @Sendable () -> Void)
-    func run() throws
-    func terminate()
+    var processIdentifier: Int32 { get async }
+    var isRunning: Bool { get async }
+    func setExecutableURL(_ url: URL) async
+    func setArguments(_ arguments: [String]) async
+    func setEnvironment(_ environment: [String: String]) async
+    func setStandardOutput(_ sink: OllamaProcessOutputSink) async
+    func setStandardError(_ sink: OllamaProcessOutputSink) async
+    func setTerminationHandler(
+        _ handler: @escaping @Sendable () -> Void
+    ) async
+    func run() async throws
+    func terminate() async
 }
 
 actor OllamaProcessExitSignal {
@@ -79,7 +80,9 @@ struct FoundationOllamaProcessLauncher: OllamaProcessLaunching, Sendable {
         self.kill = kill
     }
 
-    func launch(_ spec: OllamaLaunchSpec) throws -> any OllamaOwnedProcess {
+    func launch(
+        _ spec: OllamaLaunchSpec
+    ) async throws -> any OllamaOwnedProcess {
         guard spec.executableURL.isFileURL,
               spec.arguments == ["serve"],
               spec.host == "127.0.0.1",
@@ -91,80 +94,74 @@ struct FoundationOllamaProcessLauncher: OllamaProcessLaunching, Sendable {
 
         let process = makeProcess()
         let exitSignal = OllamaProcessExitSignal()
-        process.setExecutableURL(spec.executableURL)
-        process.setArguments(spec.arguments)
-        process.setEnvironment(spec.environment)
-        process.setStandardOutput(.null)
-        process.setStandardError(.null)
-        process.setTerminationHandler {
+        await process.setExecutableURL(spec.executableURL)
+        await process.setArguments(spec.arguments)
+        await process.setEnvironment(spec.environment)
+        await process.setStandardOutput(.null)
+        await process.setStandardError(.null)
+        await process.setTerminationHandler {
             Task {
                 await exitSignal.signalExit()
             }
         }
-        try process.run()
+        try await process.run()
 
         return FoundationOllamaOwnedProcess(
             process: process,
             exitSignal: exitSignal,
-            ownedPID: process.processIdentifier,
+            ownedPID: await process.processIdentifier,
             kill: kill
         )
     }
 }
 
-private final class FoundationOllamaProcess: OllamaFoundationProcess, Sendable {
-    private let process = OSAllocatedUnfairLock(initialState: Process())
+private actor FoundationOllamaProcess: OllamaFoundationProcess {
+    private let process = Process()
 
     var processIdentifier: Int32 {
-        process.withLock { $0.processIdentifier }
+        process.processIdentifier
     }
 
     var isRunning: Bool {
-        process.withLock { $0.isRunning }
+        process.isRunning
     }
 
     func setExecutableURL(_ url: URL) {
-        process.withLock { $0.executableURL = url }
+        process.executableURL = url
     }
 
     func setArguments(_ arguments: [String]) {
-        process.withLock { $0.arguments = arguments }
+        process.arguments = arguments
     }
 
     func setEnvironment(_ environment: [String: String]) {
-        process.withLock { $0.environment = environment }
+        process.environment = environment
     }
 
     func setStandardOutput(_ sink: OllamaProcessOutputSink) {
-        process.withLock { process in
-            switch sink {
-            case .null:
-                process.standardOutput = FileHandle.nullDevice
-            }
+        switch sink {
+        case .null:
+            process.standardOutput = FileHandle.nullDevice
         }
     }
 
     func setStandardError(_ sink: OllamaProcessOutputSink) {
-        process.withLock { process in
-            switch sink {
-            case .null:
-                process.standardError = FileHandle.nullDevice
-            }
+        switch sink {
+        case .null:
+            process.standardError = FileHandle.nullDevice
         }
     }
 
     func setTerminationHandler(_ handler: @escaping @Sendable () -> Void) {
-        process.withLock { process in
-            process.terminationHandler = { _ in handler() }
-        }
+        process.terminationHandler = { _ in handler() }
     }
 
     func run() throws {
-        try process.withLock { try $0.run() }
+        try process.run()
     }
 
-    func terminate() {
-        process.withLock { $0.terminate() }
+    func terminate() async {
+        process.terminate()
     }
 }
 
@@ -189,23 +186,25 @@ private actor FoundationOllamaOwnedProcess: OllamaOwnedProcess {
     }
 
     var processIdentifier: Int32 { ownedPID }
-    var isRunning: Bool { process.isRunning }
+    var isRunning: Bool {
+        get async { await process.isRunning }
+    }
 
-    func terminate() {
+    func terminate() async {
         guard !didRequestTermination else { return }
         didRequestTermination = true
-        guard process.isRunning else { return }
-        process.terminate()
+        guard await process.isRunning else { return }
+        await process.terminate()
     }
 
     func waitForExit() async {
         await exitSignal.waitForExit()
     }
 
-    func forceKill() {
+    func forceKill() async {
         guard !didRequestForceKill else { return }
         didRequestForceKill = true
-        guard process.isRunning else { return }
+        guard await process.isRunning else { return }
         _ = kill(ownedPID, SIGKILL)
     }
 }
@@ -311,7 +310,7 @@ actor OllamaProcessManager {
         self.stopper = stopper
     }
 
-    func start() throws {
+    func start() async throws {
         guard ownedProcess == nil, stopTask == nil else { return }
 
         let executableURL: URL
@@ -332,7 +331,7 @@ actor OllamaProcessManager {
         )
 
         do {
-            ownedProcess = try launcher.launch(spec)
+            ownedProcess = try await launcher.launch(spec)
         } catch {
             throw LocalAIError.ollamaPrivateServiceUnavailable
         }

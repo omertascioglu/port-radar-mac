@@ -9,8 +9,8 @@ private enum ProcessTestError: Error {
     case locatorFailed(String)
 }
 
-private final class FoundationProcessFake: OllamaFoundationProcess, @unchecked Sendable {
-    struct Snapshot: Equatable {
+private actor FoundationProcessFake: OllamaFoundationProcess {
+    struct Snapshot: Equatable, Sendable {
         let executableURL: URL?
         let arguments: [String]
         let environment: [String: String]
@@ -20,7 +20,6 @@ private final class FoundationProcessFake: OllamaFoundationProcess, @unchecked S
         let terminateCount: Int
     }
 
-    private let lock = NSLock()
     private let storedPID: Int32
     private var executableURL: URL?
     private var arguments: [String] = []
@@ -37,63 +36,56 @@ private final class FoundationProcessFake: OllamaFoundationProcess, @unchecked S
     }
 
     var processIdentifier: Int32 { storedPID }
-    var isRunning: Bool { lock.withLock { running } }
+    var isRunning: Bool { running }
 
     func setExecutableURL(_ url: URL) {
-        lock.withLock { executableURL = url }
+        executableURL = url
     }
 
     func setArguments(_ arguments: [String]) {
-        lock.withLock { self.arguments = arguments }
+        self.arguments = arguments
     }
 
     func setEnvironment(_ environment: [String: String]) {
-        lock.withLock { self.environment = environment }
+        self.environment = environment
     }
 
     func setStandardOutput(_ sink: OllamaProcessOutputSink) {
-        lock.withLock { standardOutput = sink }
+        standardOutput = sink
     }
 
     func setStandardError(_ sink: OllamaProcessOutputSink) {
-        lock.withLock { standardError = sink }
+        standardError = sink
     }
 
     func setTerminationHandler(_ handler: @escaping @Sendable () -> Void) {
-        lock.withLock {
-            terminationHandler = handler
-            events.append("terminationHandler")
-        }
+        terminationHandler = handler
+        events.append("terminationHandler")
     }
 
     func run() throws {
-        lock.withLock { events.append("run") }
+        events.append("run")
     }
 
     func terminate() {
-        lock.withLock { terminateCount += 1 }
+        terminateCount += 1
     }
 
     func simulateExit() {
-        let handler = lock.withLock { () -> (@Sendable () -> Void)? in
-            running = false
-            return terminationHandler
-        }
-        handler?()
+        running = false
+        terminationHandler?()
     }
 
     func snapshot() -> Snapshot {
-        lock.withLock {
-            Snapshot(
-                executableURL: executableURL,
-                arguments: arguments,
-                environment: environment,
-                standardOutput: standardOutput,
-                standardError: standardError,
-                events: events,
-                terminateCount: terminateCount
-            )
-        }
+        Snapshot(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment,
+            standardOutput: standardOutput,
+            standardError: standardError,
+            events: events,
+            terminateCount: terminateCount
+        )
     }
 }
 
@@ -132,7 +124,7 @@ private final class ProcessLauncherSpy: OllamaProcessLaunching, @unchecked Senda
         lock.withLock { storedSpecs }
     }
 
-    func launch(_ spec: OllamaLaunchSpec) throws -> any OllamaOwnedProcess {
+    func launch(_ spec: OllamaLaunchSpec) async throws -> any OllamaOwnedProcess {
         lock.withLock { storedSpecs.append(spec) }
         return try result.get()
     }
@@ -251,7 +243,7 @@ final class OllamaProcessTests: XCTestCase {
         fileURLWithPath: "/Applications/Ollama.app/Contents/Resources/ollama"
     )
 
-    func testFoundationLauncherConfiguresNullSinksAndHandlerBeforeRun() throws {
+    func testFoundationLauncherConfiguresNullSinksAndHandlerBeforeRun() async throws {
         let process = FoundationProcessFake(processIdentifier: 8123)
         let launcher = FoundationOllamaProcessLauncher(
             makeProcess: { process },
@@ -259,9 +251,9 @@ final class OllamaProcessTests: XCTestCase {
         )
         let spec = exactLaunchSpec()
 
-        _ = try launcher.launch(spec)
+        _ = try await launcher.launch(spec)
 
-        let snapshot = process.snapshot()
+        let snapshot = await process.snapshot()
         XCTAssertEqual(snapshot.executableURL, spec.executableURL)
         XCTAssertEqual(snapshot.arguments, spec.arguments)
         XCTAssertEqual(snapshot.environment, spec.environment)
@@ -277,19 +269,37 @@ final class OllamaProcessTests: XCTestCase {
             makeProcess: { process },
             kill: { pid, signal in killSpy.call(pid, signal) }
         )
-        let owned = try launcher.launch(exactLaunchSpec())
+        let owned = try await launcher.launch(exactLaunchSpec())
 
         await owned.terminate()
         await owned.terminate()
         await owned.forceKill()
         await owned.forceKill()
-        process.simulateExit()
+        await process.simulateExit()
         await owned.waitForExit()
 
-        XCTAssertEqual(process.snapshot().terminateCount, 1)
+        let snapshot = await process.snapshot()
+        XCTAssertEqual(snapshot.terminateCount, 1)
         XCTAssertEqual(killSpy.recordedCalls.count, 1)
         XCTAssertEqual(killSpy.recordedCalls.first?.0, 8123)
         XCTAssertEqual(killSpy.recordedCalls.first?.1, SIGKILL)
+    }
+
+    func testProductionFoundationProcessIsActorOwnedWithoutLockWrapper() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appendingPathComponent(
+            "Sources/DevPort/AI/OllamaProcess.swift"
+        )
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("private actor FoundationOllamaProcess:"),
+            "Raw Foundation.Process ownership must remain actor-isolated"
+        )
+        XCTAssertFalse(source.contains("OSAllocatedUnfairLock"))
     }
 
     func testStartLaunchesCanonicalExecutableWithExactPrivateServiceSpec() async throws {
