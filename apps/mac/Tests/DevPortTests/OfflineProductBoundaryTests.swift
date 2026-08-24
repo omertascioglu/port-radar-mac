@@ -33,9 +33,12 @@ final class OfflineProductBoundaryTests: XCTestCase {
 
     func testChangedShippingSourcesCarryOfflineModificationNotice() throws {
         let sourceRoot = try sourceRootURL()
-        let notice = "// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing."
+        let notices = [
+            "State/AppState.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.",
+            "Views/ContentView.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork to remove public sharing.",
+        ]
 
-        for relativePath in ["State/AppState.swift", "Views/ContentView.swift"] {
+        for (relativePath, notice) in notices {
             let url = sourceRoot.appendingPathComponent(relativePath)
             let text = try String(contentsOf: url, encoding: .utf8)
             XCTAssertTrue(text.hasPrefix(notice), "\(relativePath) must start with the fork modification notice")

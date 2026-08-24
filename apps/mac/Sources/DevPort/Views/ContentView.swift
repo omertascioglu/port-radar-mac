@@ -1,4 +1,4 @@
-// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork to remove public sharing.
 import SwiftUI
 
 /// Servers grouped by detected project (or System / Other buckets).
