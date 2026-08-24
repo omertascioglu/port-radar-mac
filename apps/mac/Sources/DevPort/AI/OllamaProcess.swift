@@ -243,7 +243,14 @@ actor OllamaProcessManager {
     }
 
     func start() throws {
-        guard ownedProcess == nil, stopTask == nil else { return }
+        _ = try startOwnedProcess()
+    }
+
+    func startOwnedProcess() throws -> any OllamaOwnedProcess {
+        if let ownedProcess { return ownedProcess }
+        guard stopTask == nil else {
+            throw LocalAIError.ollamaPrivateServiceUnavailable
+        }
 
         let executableURL: URL
         do {
@@ -263,7 +270,9 @@ actor OllamaProcessManager {
         )
 
         do {
-            ownedProcess = try launcher.launch(spec)
+            let process = try launcher.launch(spec)
+            ownedProcess = process
+            return process
         } catch {
             throw LocalAIError.ollamaPrivateServiceUnavailable
         }
