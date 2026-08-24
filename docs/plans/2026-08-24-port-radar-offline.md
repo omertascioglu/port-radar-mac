@@ -174,8 +174,6 @@ git commit -m "feat: brand the offline fork"
 **Files:**
 - Create: `apps/mac/Sources/DevPort/AI/OllamaExecutableLocator.swift`
 - Create: `apps/mac/Tests/DevPortTests/OllamaExecutableLocatorTests.swift`
-- Delete: `apps/mac/Sources/DevPort/Actions/OllamaApplication.swift`
-- Modify: `apps/mac/Sources/DevPort/AI/LocalAIError.swift`
 
 **Step 1: Write failing locator tests**
 
@@ -184,7 +182,7 @@ Define tests for these cases:
 - an executable returned from the `com.electron.ollama` app bundle is preferred;
 - `/opt/homebrew/bin/ollama` and `/usr/local/bin/ollama` are fallback candidates;
 - non-executable files and symlinks resolving outside the discovered Ollama app/known CLI locations are rejected;
-- no candidate returns `.ollamaNotInstalled` without opening an application or URL.
+- no candidate throws `OllamaExecutableLocatorError.notInstalled` without opening an application or URL.
 
 The production API should be:
 
@@ -195,6 +193,10 @@ protocol OllamaExecutableLocating: Sendable {
 
 struct OllamaExecutableLocator: OllamaExecutableLocating, Sendable {
     func locate() throws -> URL
+}
+
+enum OllamaExecutableLocatorError: Error, Equatable, Sendable {
+    case notInstalled
 }
 ```
 
@@ -213,8 +215,7 @@ Expected: compile failure because the locator does not exist.
 - Accept the app's bundled CLI only when it is inside the canonical Ollama bundle and executable.
 - Check the two known CLI paths as fallbacks.
 - Do not search arbitrary user-controlled `PATH` entries from the GUI environment.
-- Add `.ollamaNotInstalled` with bounded copy: `“Ollama is not installed. Install it separately, then try again.”`
-- Delete the old `OllamaApplication.open` helper.
+- Keep the old `OllamaApplication.open` helper temporarily because the existing Settings implementation still references it. Task 10 deletes it in the same commit that removes the Open/Download UI.
 
 **Step 4: Run tests**
 
@@ -225,7 +226,7 @@ Expected: PASS, with no application launch in tests.
 **Step 5: Commit**
 
 ```bash
-git add apps/mac/Sources/DevPort/AI apps/mac/Sources/DevPort/Actions/OllamaApplication.swift apps/mac/Tests/DevPortTests/OllamaExecutableLocatorTests.swift
+git add apps/mac/Sources/DevPort/AI/OllamaExecutableLocator.swift apps/mac/Tests/DevPortTests/OllamaExecutableLocatorTests.swift
 git commit -m "feat: locate installed Ollama safely"
 ```
 
@@ -287,6 +288,8 @@ protocol OllamaProcessLaunching: Sendable {
 The live adapter owns Foundation `Process` behind an actor and never exposes the `Process` object across isolation. Build the child environment from a minimal allowlist (`PATH`, `HOME`, `TMPDIR`, locale, model location if present), explicitly remove proxy/auth variables, then set `OLLAMA_HOST` and `OLLAMA_NO_CLOUD`. Do not copy the complete parent environment. Route output to `/dev/null`; do not create readability handlers.
 
 Use fixed dedicated port `11435` for the first implementation. If it is occupied or the child exits before readiness, fail closed with `.ollamaPrivateServiceUnavailable`; do not connect to the occupant.
+
+Map `OllamaExecutableLocatorError.notInstalled` to a new `.ollamaNotInstalled` Local AI error with bounded copy `“Ollama is not installed. Install it separately, then try again.”`. Update every exhaustive LocalAIError switch and its focused expectations in the same TDD cycle so this task leaves the full suite compiling.
 
 **Step 4: Run tests**
 
@@ -650,6 +653,7 @@ git commit -m "feat: show streaming local AI responses"
 - Modify: `apps/mac/Sources/DevPort/Views/SettingsView.swift`
 - Modify: `apps/mac/Tests/DevPortTests/OllamaSettingsModelTests.swift`
 - Modify: `apps/mac/Tests/DevPortTests/LocalAIStatusTextTests.swift`
+- Delete: `apps/mac/Sources/DevPort/Actions/OllamaApplication.swift`
 
 **Step 1: Write failing settings tests**
 
@@ -686,6 +690,7 @@ Expected: old Open/Download expectations fail.
 **Step 3: Implement temporary discovery**
 
 - Remove `openApplication`, retry delays, `openOllamaAndRetry`, and `showsDownloadLink`.
+- Delete the now-unreferenced `OllamaApplication.open` helper.
 - Acquire a service lease inside refresh, construct a lease-bound client, fetch local models, and release in a structured cleanup path.
 - Settings offers only `Check local models`/`Refresh`, provider picker, local model picker, readiness text, and non-clickable installation guidance.
 - Remove `Link("Download Ollama", ...)` and all external URL constants.
@@ -700,7 +705,7 @@ Expected: PASS; source scan finds no `ollama.com/download`, `openOllama`, or `sh
 **Step 5: Commit**
 
 ```bash
-git add apps/mac/Sources/DevPort/AI/OllamaSettingsModel.swift apps/mac/Sources/DevPort/Views/SettingsView.swift apps/mac/Tests/DevPortTests/OllamaSettingsModelTests.swift apps/mac/Tests/DevPortTests/LocalAIStatusTextTests.swift
+git add apps/mac/Sources/DevPort/AI/OllamaSettingsModel.swift apps/mac/Sources/DevPort/Actions/OllamaApplication.swift apps/mac/Sources/DevPort/Views/SettingsView.swift apps/mac/Tests/DevPortTests/OllamaSettingsModelTests.swift apps/mac/Tests/DevPortTests/LocalAIStatusTextTests.swift
 git commit -m "feat: discover models with private Ollama"
 ```
 
