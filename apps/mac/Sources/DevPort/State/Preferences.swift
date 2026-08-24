@@ -1,4 +1,4 @@
-// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution.
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.
 import Foundation
 import Observation
 
@@ -41,7 +41,7 @@ final class Preferences {
         didSet { defaults.set(hideSystemProcesses, forKey: Key.hideSystem) }
     }
 
-    /// Launch Port Radar when the user logs in. Backed by `SMAppService`, not UserDefaults.
+    /// Launch Port Radar Offline when the user logs in. Backed by `SMAppService`, not UserDefaults.
     var launchAtLogin: Bool {
         didSet {
             guard !suppressLaunchAtLoginWrite else { return }

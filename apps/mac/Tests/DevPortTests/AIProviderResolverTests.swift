@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.
 import XCTest
 @testable import DevPort
 
@@ -330,7 +331,7 @@ final class AIProviderResolverTests: XCTestCase {
             ),
             (
                 .unsafeLocalEndpoint,
-                "Ollama redirected outside Port Radar's local-only boundary."
+                "Ollama redirected outside Port Radar Offline's local-only boundary."
             ),
             (.timedOut, "The local model took too long to respond."),
             (.malformedResponse, "Ollama returned an unreadable response.")

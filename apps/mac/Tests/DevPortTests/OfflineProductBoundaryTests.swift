@@ -31,13 +31,37 @@ final class OfflineProductBoundaryTests: XCTestCase {
         XCTAssertEqual(violations, [])
     }
 
+    func testShippingSwiftSourcesContainNoLegacyProductIdentity() throws {
+        let sourceRoot = try sourceRootURL()
+        let violations = try swiftSources(at: sourceRoot).flatMap { url in
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let relativePath = url.path.replacingOccurrences(of: sourceRoot.path + "/", with: "")
+            let withoutOfflineName = text.replacingOccurrences(of: "Port Radar Offline", with: "")
+            var fileViolations: [String] = []
+
+            if withoutOfflineName.contains("Port Radar") {
+                fileViolations.append("\(relativePath): legacy Port Radar name")
+            }
+            if text.contains("com.sebsol.DevPort") {
+                fileViolations.append("\(relativePath): legacy com.sebsol.DevPort identifier")
+            }
+
+            return fileViolations
+        }
+
+        XCTAssertEqual(violations, [])
+    }
+
     func testChangedShippingSourcesCarryOfflineModificationNotice() throws {
         let sourceRoot = try sourceRootURL()
         let notices = [
             "Actions/LaunchAtLogin.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.",
+            "AI/LocalAIError.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
             "AI/LocalAIProvider.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
             "DevPortApp.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
+            "Scanner/PortScanner.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.",
             "State/AppState.swift": "// Modification notice: Changed in 2026 for the Port Radar Offline fork to remove public sharing.",
+            "State/Preferences.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.",
             "Views/ContentView.swift": "// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork to remove public sharing and adopt its product identity.",
         ]
 
