@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Modification notice: Changed in 2026 for the Port Radar Offline fork product identity. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Port Radar</string>
+	<string>Port Radar Offline</string>
 	<key>CFBundleDisplayName</key>
-	<string>Port Radar</string>
+	<string>Port Radar Offline</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.sebsol.DevPort</string>
+	<string>com.omertascioglu.PortRadarOffline</string>
 	<key>CFBundleExecutable</key>
 	<string>DevPort</string>
 	<key>CFBundleIconFile</key>

@@ -1,14 +1,15 @@
-# SPM executable target stays DevPort; the bundled app shows as Port Radar.
-PRODUCT_NAME := Port Radar
+# Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.
+# SPM executable target stays DevPort; the bundled app shows as Port Radar Offline.
+PRODUCT_NAME := Port Radar Offline
 EXECUTABLE   := DevPort
 BUNDLE       := $(PRODUCT_NAME).app
 BINARY       := .build/release/$(EXECUTABLE)
 VERSION      := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Support/Info.plist)
 DIST         := dist
-DMG          := $(DIST)/Port-Radar-$(VERSION).dmg
+DMG          := $(DIST)/Port-Radar-Offline-$(VERSION).dmg
 # Stable filename for the site's download button — the /releases/latest/download/
 # URL matches on asset name, so this must not change between versions.
-DMG_LATEST   := $(DIST)/Port-Radar.dmg
+DMG_LATEST   := $(DIST)/Port-Radar-Offline.dmg
 
 # Set these to ship a build strangers can open without a Gatekeeper warning.
 #   DEVELOPER_ID   "Developer ID Application: Name (TEAMID)"  — see `make identities`
@@ -91,10 +92,10 @@ notarize: dmg
 	@echo "Notarized and stapled: $(DMG)"
 
 # Publish the DMG so the site's download button resolves to it.
-# The asset name must stay Port-Radar.dmg — don't rename it.
+# The asset name must stay Port-Radar-Offline.dmg — don't rename it.
 publish: dmg
 	gh release create "v$(VERSION)" "$(DMG_LATEST)" \
-		--title "Port Radar $(VERSION)" \
+		--title "Port Radar Offline $(VERSION)" \
 		--notes-file Support/release-notes.md
 
 # What a downloader's Mac will decide about this build.

@@ -1,4 +1,4 @@
-// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork to remove public sharing.
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork to remove public sharing and adopt its product identity.
 import SwiftUI
 
 /// Servers grouped by detected project (or System / Other buckets).
@@ -162,7 +162,7 @@ struct ContentView: View {
 
     private var header: some View {
         HStack {
-            Text("Port Radar")
+            Text("Port Radar Offline")
                 .font(.headline)
             Spacer()
             Text("\(visibleServers.count) listening")
@@ -236,7 +236,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "power")
-                    Text("Quit Port Radar")
+                    Text("Quit Port Radar Offline")
                     Spacer()
                     Text("⌘Q")
                         .font(.caption)
@@ -258,7 +258,7 @@ struct QuitModal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Quit Port Radar?")
+                Text("Quit Port Radar Offline?")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
 

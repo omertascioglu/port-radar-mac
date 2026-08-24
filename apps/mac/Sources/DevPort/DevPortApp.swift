@@ -1,4 +1,4 @@
-// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution.
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.
 import AppKit
 import SwiftUI
 
@@ -37,7 +37,7 @@ struct DevPortApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Port Radar", systemImage: "antenna.radiowaves.left.and.right") {
+        MenuBarExtra("Port Radar Offline", systemImage: "antenna.radiowaves.left.and.right") {
             ContentView()
         }
         .menuBarExtraStyle(.window)

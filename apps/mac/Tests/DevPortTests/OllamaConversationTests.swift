@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork product identity.
 import XCTest
 @testable import DevPort
 
@@ -418,7 +419,7 @@ final class OllamaConversationTests: XCTestCase {
                 .init(
                     role: "system",
                     content: """
-                    You are a concise assistant inside Port Radar, a macOS menu-bar app that lists localhost listeners.
+                    You are a concise assistant inside Port Radar Offline, a macOS menu-bar app that lists localhost listeners.
                     The user is asking about one specific process. Use only the process context below.
                     If something isn’t in the context, say you don’t know — don’t invent system state.
                     Prefer short, practical answers for developers.
