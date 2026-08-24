@@ -1,10 +1,114 @@
 // Modification notice: Added in 2026 for the Port Radar Offline fork.
+import Darwin
 import Foundation
 import XCTest
 @testable import DevPort
 
 private enum ProcessTestError: Error {
     case launchFailed
+    case locatorFailed(String)
+}
+
+private final class FoundationProcessFake: OllamaFoundationProcess, @unchecked Sendable {
+    struct Snapshot: Equatable {
+        let executableURL: URL?
+        let arguments: [String]
+        let environment: [String: String]
+        let standardOutput: OllamaProcessOutputSink?
+        let standardError: OllamaProcessOutputSink?
+        let events: [String]
+        let terminateCount: Int
+    }
+
+    private let lock = NSLock()
+    private let storedPID: Int32
+    private var executableURL: URL?
+    private var arguments: [String] = []
+    private var environment: [String: String] = [:]
+    private var standardOutput: OllamaProcessOutputSink?
+    private var standardError: OllamaProcessOutputSink?
+    private var terminationHandler: (@Sendable () -> Void)?
+    private var events: [String] = []
+    private var running = true
+    private var terminateCount = 0
+
+    init(processIdentifier: Int32) {
+        storedPID = processIdentifier
+    }
+
+    var processIdentifier: Int32 { storedPID }
+    var isRunning: Bool { lock.withLock { running } }
+
+    func setExecutableURL(_ url: URL) {
+        lock.withLock { executableURL = url }
+    }
+
+    func setArguments(_ arguments: [String]) {
+        lock.withLock { self.arguments = arguments }
+    }
+
+    func setEnvironment(_ environment: [String: String]) {
+        lock.withLock { self.environment = environment }
+    }
+
+    func setStandardOutput(_ sink: OllamaProcessOutputSink) {
+        lock.withLock { standardOutput = sink }
+    }
+
+    func setStandardError(_ sink: OllamaProcessOutputSink) {
+        lock.withLock { standardError = sink }
+    }
+
+    func setTerminationHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            terminationHandler = handler
+            events.append("terminationHandler")
+        }
+    }
+
+    func run() throws {
+        lock.withLock { events.append("run") }
+    }
+
+    func terminate() {
+        lock.withLock { terminateCount += 1 }
+    }
+
+    func simulateExit() {
+        let handler = lock.withLock { () -> (@Sendable () -> Void)? in
+            running = false
+            return terminationHandler
+        }
+        handler?()
+    }
+
+    func snapshot() -> Snapshot {
+        lock.withLock {
+            Snapshot(
+                executableURL: executableURL,
+                arguments: arguments,
+                environment: environment,
+                standardOutput: standardOutput,
+                standardError: standardError,
+                events: events,
+                terminateCount: terminateCount
+            )
+        }
+    }
+}
+
+private final class KillSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [(Int32, Int32)] = []
+
+    func call(_ pid: Int32, _ signal: Int32) -> Int32 {
+        lock.withLock { calls.append((pid, signal)) }
+        return 0
+    }
+
+    var recordedCalls: [(Int32, Int32)] {
+        lock.withLock { calls }
+    }
 }
 
 private struct ProcessLocatorStub: OllamaExecutableLocating {
@@ -54,6 +158,7 @@ private actor OwnedProcessFake: OllamaOwnedProcess {
         let terminateCount: Int
         let forceKillCount: Int
         let forceKilledPIDs: [Int32]
+        let waitForExitCount: Int
     }
 
     init(
@@ -96,7 +201,8 @@ private actor OwnedProcessFake: OllamaOwnedProcess {
             isRunning: running,
             terminateCount: terminateCount,
             forceKillCount: forceKillCount,
-            forceKilledPIDs: forceKilledPIDs
+            forceKilledPIDs: forceKilledPIDs,
+            waitForExitCount: waitForExitCount
         )
     }
 
@@ -144,6 +250,47 @@ final class OllamaProcessTests: XCTestCase {
     private let executableURL = URL(
         fileURLWithPath: "/Applications/Ollama.app/Contents/Resources/ollama"
     )
+
+    func testFoundationLauncherConfiguresNullSinksAndHandlerBeforeRun() throws {
+        let process = FoundationProcessFake(processIdentifier: 8123)
+        let launcher = FoundationOllamaProcessLauncher(
+            makeProcess: { process },
+            kill: { _, _ in 0 }
+        )
+        let spec = exactLaunchSpec()
+
+        _ = try launcher.launch(spec)
+
+        let snapshot = process.snapshot()
+        XCTAssertEqual(snapshot.executableURL, spec.executableURL)
+        XCTAssertEqual(snapshot.arguments, spec.arguments)
+        XCTAssertEqual(snapshot.environment, spec.environment)
+        XCTAssertEqual(snapshot.standardOutput, .null)
+        XCTAssertEqual(snapshot.standardError, .null)
+        XCTAssertEqual(snapshot.events, ["terminationHandler", "run"])
+    }
+
+    func testFoundationOwnedAdapterUsesExactPIDAndIdempotentSignals() async throws {
+        let process = FoundationProcessFake(processIdentifier: 8123)
+        let killSpy = KillSpy()
+        let launcher = FoundationOllamaProcessLauncher(
+            makeProcess: { process },
+            kill: { pid, signal in killSpy.call(pid, signal) }
+        )
+        let owned = try launcher.launch(exactLaunchSpec())
+
+        await owned.terminate()
+        await owned.terminate()
+        await owned.forceKill()
+        await owned.forceKill()
+        process.simulateExit()
+        await owned.waitForExit()
+
+        XCTAssertEqual(process.snapshot().terminateCount, 1)
+        XCTAssertEqual(killSpy.recordedCalls.count, 1)
+        XCTAssertEqual(killSpy.recordedCalls.first?.0, 8123)
+        XCTAssertEqual(killSpy.recordedCalls.first?.1, SIGKILL)
+    }
 
     func testStartLaunchesCanonicalExecutableWithExactPrivateServiceSpec() async throws {
         let process = OwnedProcessFake(terminationBehavior: .exits)
@@ -274,6 +421,39 @@ final class OllamaProcessTests: XCTestCase {
         }
     }
 
+    func testUnexpectedLocatorFailureMapsToBoundedGenericMessage() async {
+        let process = OwnedProcessFake(terminationBehavior: .exits)
+        let launcher = ProcessLauncherSpy(result: .success(process))
+        let manager = OllamaProcessManager(
+            locator: ProcessLocatorStub(
+                result: .failure(
+                    ProcessTestError.locatorFailed("/secret/path api-token")
+                )
+            ),
+            launcher: launcher,
+            parentEnvironment: { [:] }
+        )
+
+        do {
+            try await manager.start()
+            XCTFail("Expected private service error")
+        } catch {
+            XCTAssertEqual(
+                error as? LocalAIError,
+                .ollamaPrivateServiceUnavailable
+            )
+            XCTAssertEqual(
+                (error as? LocalAIError)?.errorDescription,
+                "Unable to start the private local Ollama service."
+            )
+            XCTAssertFalse(
+                ((error as? LocalAIError)?.errorDescription ?? "")
+                    .contains("api-token")
+            )
+        }
+        XCTAssertTrue(launcher.specs.isEmpty)
+    }
+
     func testExitSignalRemembersExitThatHappensBeforeWaiterRegisters() async {
         let signal = OllamaProcessExitSignal()
 
@@ -298,6 +478,7 @@ final class OllamaProcessTests: XCTestCase {
         let snapshot = await process.snapshot()
         XCTAssertEqual(snapshot.terminateCount, 1)
         XCTAssertEqual(snapshot.forceKillCount, 0)
+        XCTAssertEqual(snapshot.waitForExitCount, 1)
         XCTAssertFalse(snapshot.isRunning)
     }
 
@@ -319,6 +500,7 @@ final class OllamaProcessTests: XCTestCase {
         let snapshot = await process.snapshot()
         XCTAssertEqual(snapshot.terminateCount, 1)
         XCTAssertEqual(snapshot.forceKillCount, 0)
+        XCTAssertEqual(snapshot.waitForExitCount, 1)
         XCTAssertFalse(snapshot.isRunning)
     }
 
@@ -345,6 +527,7 @@ final class OllamaProcessTests: XCTestCase {
         XCTAssertEqual(snapshot.terminateCount, 1)
         XCTAssertEqual(snapshot.forceKillCount, 1)
         XCTAssertEqual(snapshot.forceKilledPIDs, [7331])
+        XCTAssertEqual(snapshot.waitForExitCount, 1)
         XCTAssertFalse(snapshot.isRunning)
     }
 
@@ -368,6 +551,7 @@ final class OllamaProcessTests: XCTestCase {
         let snapshot = await process.snapshot()
         XCTAssertEqual(snapshot.terminateCount, 1)
         XCTAssertEqual(snapshot.forceKillCount, 1)
+        XCTAssertEqual(snapshot.waitForExitCount, 1)
     }
 
     private func makeManager(
@@ -394,6 +578,20 @@ final class OllamaProcessTests: XCTestCase {
                 gracePeriod: .seconds(2),
                 sleep: sleep
             )
+        )
+    }
+
+    private func exactLaunchSpec() -> OllamaLaunchSpec {
+        OllamaLaunchSpec(
+            executableURL: executableURL,
+            arguments: ["serve"],
+            environment: [
+                "PATH": "/usr/bin:/bin",
+                "OLLAMA_HOST": "127.0.0.1:11435",
+                "OLLAMA_NO_CLOUD": "1",
+            ],
+            host: "127.0.0.1",
+            port: 11435
         )
     }
 }

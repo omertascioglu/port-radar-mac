@@ -1,6 +1,7 @@
 // Modification notice: Added in 2026 for the Port Radar Offline fork.
 import Darwin
 import Foundation
+import os
 
 struct OllamaLaunchSpec: Equatable, Sendable {
     let executableURL: URL
@@ -20,6 +21,23 @@ protocol OllamaOwnedProcess: Sendable {
 
 protocol OllamaProcessLaunching: Sendable {
     func launch(_ spec: OllamaLaunchSpec) throws -> any OllamaOwnedProcess
+}
+
+enum OllamaProcessOutputSink: Equatable, Sendable {
+    case null
+}
+
+protocol OllamaFoundationProcess: Sendable {
+    var processIdentifier: Int32 { get }
+    var isRunning: Bool { get }
+    func setExecutableURL(_ url: URL)
+    func setArguments(_ arguments: [String])
+    func setEnvironment(_ environment: [String: String])
+    func setStandardOutput(_ sink: OllamaProcessOutputSink)
+    func setStandardError(_ sink: OllamaProcessOutputSink)
+    func setTerminationHandler(_ handler: @escaping @Sendable () -> Void)
+    func run() throws
+    func terminate()
 }
 
 actor OllamaProcessExitSignal {
@@ -47,6 +65,20 @@ private enum FoundationOllamaProcessError: Error {
 }
 
 struct FoundationOllamaProcessLauncher: OllamaProcessLaunching, Sendable {
+    typealias MakeProcess = @Sendable () -> any OllamaFoundationProcess
+    typealias Kill = @Sendable (Int32, Int32) -> Int32
+
+    private let makeProcess: MakeProcess
+    private let kill: Kill
+
+    init(
+        makeProcess: @escaping MakeProcess = { FoundationOllamaProcess() },
+        kill: @escaping Kill = { pid, signal in Darwin.kill(pid, signal) }
+    ) {
+        self.makeProcess = makeProcess
+        self.kill = kill
+    }
+
     func launch(_ spec: OllamaLaunchSpec) throws -> any OllamaOwnedProcess {
         guard spec.executableURL.isFileURL,
               spec.arguments == ["serve"],
@@ -56,35 +88,104 @@ struct FoundationOllamaProcessLauncher: OllamaProcessLaunching, Sendable {
               spec.environment["OLLAMA_NO_CLOUD"] == "1" else {
             throw FoundationOllamaProcessError.invalidLaunchSpec
         }
-        return try FoundationOllamaOwnedProcess(spec: spec)
-    }
-}
 
-private actor FoundationOllamaOwnedProcess: OllamaOwnedProcess {
-    private let process: Process
-    private let exitSignal: OllamaProcessExitSignal
-    private let ownedPID: Int32
-    private var didRequestTermination = false
-    private var didRequestForceKill = false
-
-    init(spec: OllamaLaunchSpec) throws {
+        let process = makeProcess()
         let exitSignal = OllamaProcessExitSignal()
-        let process = Process()
-        process.executableURL = spec.executableURL
-        process.arguments = spec.arguments
-        process.environment = spec.environment
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { _ in
+        process.setExecutableURL(spec.executableURL)
+        process.setArguments(spec.arguments)
+        process.setEnvironment(spec.environment)
+        process.setStandardOutput(.null)
+        process.setStandardError(.null)
+        process.setTerminationHandler {
             Task {
                 await exitSignal.signalExit()
             }
         }
         try process.run()
 
+        return FoundationOllamaOwnedProcess(
+            process: process,
+            exitSignal: exitSignal,
+            ownedPID: process.processIdentifier,
+            kill: kill
+        )
+    }
+}
+
+private final class FoundationOllamaProcess: OllamaFoundationProcess, Sendable {
+    private let process = OSAllocatedUnfairLock(initialState: Process())
+
+    var processIdentifier: Int32 {
+        process.withLock { $0.processIdentifier }
+    }
+
+    var isRunning: Bool {
+        process.withLock { $0.isRunning }
+    }
+
+    func setExecutableURL(_ url: URL) {
+        process.withLock { $0.executableURL = url }
+    }
+
+    func setArguments(_ arguments: [String]) {
+        process.withLock { $0.arguments = arguments }
+    }
+
+    func setEnvironment(_ environment: [String: String]) {
+        process.withLock { $0.environment = environment }
+    }
+
+    func setStandardOutput(_ sink: OllamaProcessOutputSink) {
+        process.withLock { process in
+            switch sink {
+            case .null:
+                process.standardOutput = FileHandle.nullDevice
+            }
+        }
+    }
+
+    func setStandardError(_ sink: OllamaProcessOutputSink) {
+        process.withLock { process in
+            switch sink {
+            case .null:
+                process.standardError = FileHandle.nullDevice
+            }
+        }
+    }
+
+    func setTerminationHandler(_ handler: @escaping @Sendable () -> Void) {
+        process.withLock { process in
+            process.terminationHandler = { _ in handler() }
+        }
+    }
+
+    func run() throws {
+        try process.withLock { try $0.run() }
+    }
+
+    func terminate() {
+        process.withLock { $0.terminate() }
+    }
+}
+
+private actor FoundationOllamaOwnedProcess: OllamaOwnedProcess {
+    private let process: any OllamaFoundationProcess
+    private let exitSignal: OllamaProcessExitSignal
+    private let ownedPID: Int32
+    private let kill: FoundationOllamaProcessLauncher.Kill
+    private var didRequestTermination = false
+    private var didRequestForceKill = false
+
+    init(
+        process: any OllamaFoundationProcess,
+        exitSignal: OllamaProcessExitSignal,
+        ownedPID: Int32,
+        kill: @escaping FoundationOllamaProcessLauncher.Kill
+    ) {
         self.process = process
         self.exitSignal = exitSignal
-        ownedPID = process.processIdentifier
+        self.ownedPID = ownedPID
+        self.kill = kill
     }
 
     var processIdentifier: Int32 { ownedPID }
@@ -105,7 +206,7 @@ private actor FoundationOllamaOwnedProcess: OllamaOwnedProcess {
         guard !didRequestForceKill else { return }
         didRequestForceKill = true
         guard process.isRunning else { return }
-        _ = Darwin.kill(ownedPID, SIGKILL)
+        _ = kill(ownedPID, SIGKILL)
     }
 }
 
@@ -171,11 +272,10 @@ struct OllamaProcessStopper: Sendable {
         case .exited:
             timeoutTask.cancel()
         case .graceExpired:
-            exitTask.cancel()
             if await process.isRunning {
                 await process.forceKill()
             }
-            await process.waitForExit()
+            await exitTask.value
         }
     }
 }
