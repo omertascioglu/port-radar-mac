@@ -32,6 +32,69 @@ private actor ServiceOwnedProcessFake: OllamaOwnedProcess {
     }
 }
 
+/// Owned-process fake whose `isRunning` check can be parked, so a final
+/// `release()` can interleave with an `acquire()` that is already suspended
+/// inside its liveness check. `terminate()` only records the request: a real
+/// child still reports as running inside its stop grace period, which is the
+/// exact window where the resumed `acquire()` must re-validate actor state.
+private actor ParkedLivenessProcessFake: OllamaOwnedProcess {
+    let processIdentifier: Int32
+    private var shouldParkNextCall = false
+    private var didPark = false
+    private var parkedCallers: [CheckedContinuation<Void, Never>] = []
+    private var parkObservers: [CheckedContinuation<Void, Never>] = []
+    private var terminationRequested = false
+
+    init(processIdentifier: Int32) {
+        self.processIdentifier = processIdentifier
+    }
+
+    var isRunning: Bool {
+        get async {
+            if shouldParkNextCall {
+                shouldParkNextCall = false
+                didPark = true
+                let observers = parkObservers
+                parkObservers.removeAll()
+                observers.forEach { $0.resume() }
+                await withCheckedContinuation { continuation in
+                    parkedCallers.append(continuation)
+                }
+            }
+            return true
+        }
+    }
+
+    func terminate() {
+        terminationRequested = true
+    }
+
+    func waitForExit() async {}
+
+    func forceKill() {
+        terminationRequested = true
+    }
+
+    func didRequestTermination() -> Bool { terminationRequested }
+
+    func parkNextLivenessCheck() {
+        shouldParkNextCall = true
+    }
+
+    func waitForParkedLivenessCheck() async {
+        if didPark { return }
+        await withCheckedContinuation { continuation in
+            parkObservers.append(continuation)
+        }
+    }
+
+    func resumeParkedLivenessCheck() {
+        let parked = parkedCallers
+        parkedCallers.removeAll()
+        parked.forEach { $0.resume() }
+    }
+}
+
 private actor ServiceProcessControllerFake: OllamaServiceProcessControlling {
     struct Snapshot: Equatable, Sendable {
         let startCount: Int
@@ -39,8 +102,8 @@ private actor ServiceProcessControllerFake: OllamaServiceProcessControlling {
         let events: [String]
     }
 
-    private var queuedProcesses: [ServiceOwnedProcessFake]
-    private var currentProcess: ServiceOwnedProcessFake?
+    private var queuedProcesses: [any OllamaOwnedProcess]
+    private var currentProcess: (any OllamaOwnedProcess)?
     private var startCount = 0
     private var stopCount = 0
     private var events: [String] = []
@@ -48,7 +111,7 @@ private actor ServiceProcessControllerFake: OllamaServiceProcessControlling {
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     private var stopStartedWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(processes: [ServiceOwnedProcessFake]) {
+    init(processes: [any OllamaOwnedProcess]) {
         queuedProcesses = processes
     }
 
@@ -478,6 +541,50 @@ final class OllamaServiceManagerTests: XCTestCase {
             ["start", "stop-began", "stop-ended", "start"]
         )
         await second.release()
+    }
+
+    func testFinalReleaseDuringParkedLivenessCheckNeverLeasesStoppedService() async throws {
+        let firstProcess = ParkedLivenessProcessFake(processIdentifier: 4117)
+        let secondProcess = ServiceOwnedProcessFake(processIdentifier: 4118)
+        let controller = ServiceProcessControllerFake(
+            processes: [firstProcess, secondProcess]
+        )
+        let probe = ServiceProbeFake(results: [
+            .success(readyResponse()),
+            .success(readyResponse()),
+        ])
+        let manager = makeManager(controller: controller, probe: probe)
+        let first = try await manager.acquire()
+
+        await firstProcess.parkNextLivenessCheck()
+        let acquireTask = Task { try await manager.acquire() }
+        await firstProcess.waitForParkedLivenessCheck()
+        await first.release()
+        var snapshot = await controller.snapshot()
+        XCTAssertEqual(snapshot.events, ["start", "stop-began", "stop-ended"])
+        let firstWasTerminated = await firstProcess.didRequestTermination()
+        XCTAssertTrue(firstWasTerminated)
+        await firstProcess.resumeParkedLivenessCheck()
+
+        let second = try await acquireTask.value
+        XCTAssertNotEqual(second.endpoint.processIdentifier, 4117)
+        XCTAssertEqual(second.endpoint.processIdentifier, 4118)
+        snapshot = await controller.snapshot()
+        XCTAssertEqual(snapshot.startCount, 2)
+        XCTAssertEqual(snapshot.stopCount, 1)
+
+        await second.release()
+        snapshot = await controller.snapshot()
+        XCTAssertEqual(snapshot.stopCount, 2)
+        XCTAssertEqual(
+            snapshot.events,
+            [
+                "start", "stop-began", "stop-ended",
+                "start", "stop-began", "stop-ended",
+            ]
+        )
+        let secondIsRunning = await secondProcess.isRunning
+        XCTAssertFalse(secondIsRunning)
     }
 
     func testCancellationDuringOnlyStartupStopsUnownedChild() async {

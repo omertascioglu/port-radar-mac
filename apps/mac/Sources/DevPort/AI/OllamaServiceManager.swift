@@ -230,6 +230,7 @@ actor OllamaServiceManager {
     private var pendingAcquires: [UUID: UUID] = [:]
     private var activeEndpoint: OllamaServiceEndpoint?
     private var activeProcess: (any OllamaOwnedProcess)?
+    private var activeGeneration: UInt64 = 0
     private var leaseIDs: Set<UUID> = []
     private var stopState: StopState?
     private var isShutDown = false
@@ -277,7 +278,26 @@ actor OllamaServiceManager {
         }
 
         if let activeEndpoint {
-            guard let activeProcess, await activeProcess.isRunning else {
+            guard let activeProcess else {
+                self.activeEndpoint = nil
+                leaseIDs.removeAll()
+                await stopController()
+                throw privateServiceError()
+            }
+
+            // The liveness check suspends, and this actor is reentrant, so a
+            // final release or shutdown can retire this service generation
+            // while we wait. Re-validate before binding a lease to it.
+            let generation = activeGeneration
+            let isRunning = await activeProcess.isRunning
+            guard !isShutDown else { throw privateServiceError() }
+            guard activeGeneration == generation,
+                  self.activeEndpoint == activeEndpoint,
+                  stopState == nil else {
+                try Task.checkCancellation()
+                return try await acquire()
+            }
+            guard isRunning else {
                 self.activeEndpoint = nil
                 self.activeProcess = nil
                 leaseIDs.removeAll()
@@ -487,6 +507,7 @@ actor OllamaServiceManager {
         }
         activeEndpoint = result.endpoint
         activeProcess = result.process
+        activeGeneration &+= 1
         startup = nil
         return makeLease(endpoint: result.endpoint)
     }
