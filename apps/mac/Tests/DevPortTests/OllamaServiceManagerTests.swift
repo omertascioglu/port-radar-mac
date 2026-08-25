@@ -177,6 +177,40 @@ private actor CancellationProbeFake: OllamaServiceReadinessProbing {
     }
 }
 
+private actor ExitDuringSuccessfulProbeFake: OllamaServiceReadinessProbing {
+    struct Snapshot: Equatable, Sendable {
+        let requests: [URL]
+        let childWasRunningBeforeProbeResult: Bool
+    }
+
+    private let process: ServiceOwnedProcessFake
+    private let response: OllamaReadinessResponse
+    private var requests: [URL] = []
+    private var childWasRunningBeforeProbeResult = false
+
+    init(
+        process: ServiceOwnedProcessFake,
+        response: OllamaReadinessResponse
+    ) {
+        self.process = process
+        self.response = response
+    }
+
+    func probe(_ url: URL) async throws -> OllamaReadinessResponse {
+        requests.append(url)
+        childWasRunningBeforeProbeResult = await process.isRunning
+        await process.simulateExit()
+        return response
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(
+            requests: requests,
+            childWasRunningBeforeProbeResult: childWasRunningBeforeProbeResult
+        )
+    }
+}
+
 private actor ServiceSleepRecorder {
     private var durations: [Duration] = []
 
@@ -263,6 +297,27 @@ final class OllamaServiceManagerTests: XCTestCase {
         let processIsRunning = await process.isRunning
         XCTAssertTrue(processIsRunning)
         await lease.release()
+    }
+
+    func testSuccessfulProbeCannotMakeExitedChildReady() async {
+        let process = ServiceOwnedProcessFake(processIdentifier: 4116)
+        let controller = ServiceProcessControllerFake(processes: [process])
+        let probe = ExitDuringSuccessfulProbeFake(
+            process: process,
+            response: readyResponse()
+        )
+        let manager = makeManager(controller: controller, probe: probe)
+
+        await assertPrivateServiceFailure { _ = try await manager.acquire() }
+
+        let probeSnapshot = await probe.snapshot()
+        let controllerSnapshot = await controller.snapshot()
+        XCTAssertEqual(probeSnapshot.requests, [versionURL])
+        XCTAssertTrue(probeSnapshot.childWasRunningBeforeProbeResult)
+        XCTAssertEqual(controllerSnapshot.startCount, 1)
+        XCTAssertEqual(controllerSnapshot.stopCount, 1)
+        let processIsRunning = await process.isRunning
+        XCTAssertFalse(processIsRunning)
     }
 
     func testLaterAcquireNeverReturnsEndpointForExitedOwnedChild() async throws {
