@@ -25,8 +25,11 @@ enum PrivateServiceOllamaClient {
         OllamaClient(transport: OllamaTransport(lease: lease))
     }
 
-    /// Lease lifetime stays with the callers that own a conversation or a
-    /// settings refresh; this only guarantees the private-service binding.
+    /// Interim, known leak: the lease acquired here is never released. Only
+    /// the client escapes this closure, so nothing can call `release()` on it
+    /// and the private service stays alive for the rest of the process.
+    /// Moving lease acquisition and release to the conversation and
+    /// settings-refresh call sites is owned by Tasks 8 and 10.
     static let provider: OllamaClientProviding = {
         factory(try await OllamaServiceManager.shared.acquire())
     }
