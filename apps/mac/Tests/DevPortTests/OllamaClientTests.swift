@@ -13,12 +13,91 @@ private enum QueuedTransportResult: @unchecked Sendable {
     case failure(any Error)
 }
 
+private actor RecordSourceSignal {
+    private var isSignalled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        isSignalled = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard !isSignalled else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func signalled() -> Bool { isSignalled }
+}
+
+/// A record stream the test drives: records arrive only when the test sends
+/// them, and the stream stays open until the test closes it.
+private final class ControlledRecordSource: Sendable {
+    let stream: AsyncThrowingStream<Data, any Error>
+    private let continuation: AsyncThrowingStream<Data, any Error>.Continuation
+    private let termination = RecordSourceSignal()
+
+    init() {
+        let (stream, continuation) = AsyncThrowingStream<
+            Data,
+            any Error
+        >.makeStream()
+        self.stream = stream
+        self.continuation = continuation
+        let termination = self.termination
+        continuation.onTermination = { _ in
+            Task { await termination.signal() }
+        }
+    }
+
+    func send(_ record: String) {
+        continuation.yield(Data(record.utf8))
+    }
+
+    func finish() {
+        continuation.finish()
+    }
+
+    func fail(_ error: any Error) {
+        continuation.finish(throwing: error)
+    }
+
+    func waitUntilTerminated() async {
+        await termination.wait()
+    }
+
+    func isTerminated() async -> Bool {
+        await termination.signalled()
+    }
+}
+
+private enum QueuedStreamResult: @unchecked Sendable {
+    case records([String])
+    case recordsThenFailure([String], any Error)
+    case source(ControlledRecordSource)
+    case failure(any Error)
+    case suspendedUntilCancelled
+}
+
 private actor QueueTransport: OllamaTransporting {
     private var queuedResults: [QueuedTransportResult]
+    private let streamResult: QueuedStreamResult
     private var requests: [CapturedOllamaRequest] = []
+    private var streamRequests: [CapturedOllamaRequest] = []
+    private var suspendedStream: CheckedContinuation<
+        AsyncThrowingStream<Data, any Error>,
+        any Error
+    >?
+    private var didCancelSuspendedStream = false
 
-    init(_ queuedResults: [QueuedTransportResult]) {
+    init(
+        _ queuedResults: [QueuedTransportResult] = [],
+        stream streamResult: QueuedStreamResult = .records([])
+    ) {
         self.queuedResults = queuedResults
+        self.streamResult = streamResult
     }
 
     func request(
@@ -39,8 +118,61 @@ private actor QueueTransport: OllamaTransporting {
         }
     }
 
+    func stream(
+        path: String,
+        method: String,
+        body: Data?
+    ) async throws -> AsyncThrowingStream<Data, any Error> {
+        streamRequests.append(.init(path: path, method: method, body: body))
+
+        switch streamResult {
+        case .records(let records):
+            return finishedStream(records, failure: nil)
+        case .recordsThenFailure(let records, let error):
+            return finishedStream(records, failure: error)
+        case .source(let source):
+            return source.stream
+        case .failure(let error):
+            throw error
+        case .suspendedUntilCancelled:
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    if didCancelSuspendedStream {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        suspendedStream = continuation
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelSuspendedStream() }
+            }
+        }
+    }
+
     func capturedRequests() -> [CapturedOllamaRequest] {
         requests
+    }
+
+    func capturedStreamRequests() -> [CapturedOllamaRequest] {
+        streamRequests
+    }
+
+    private func cancelSuspendedStream() {
+        didCancelSuspendedStream = true
+        suspendedStream?.resume(throwing: CancellationError())
+        suspendedStream = nil
+    }
+
+    private func finishedStream(
+        _ records: [String],
+        failure: (any Error)?
+    ) -> AsyncThrowingStream<Data, any Error> {
+        AsyncThrowingStream<Data, any Error> { continuation in
+            for record in records {
+                continuation.yield(Data(record.utf8))
+            }
+            continuation.finish(throwing: failure)
+        }
     }
 }
 
@@ -196,37 +328,298 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertEqual(requests.map(\.path), ["/api/tags"])
     }
 
-    func testChatEncodesNoToolsAndUsesTwoMinuteKeepAlive() async throws {
-        let transport = QueueTransport([.success(Data(
-            """
-            {"message":{"role":"assistant","content":"Local answer"}}
-            """.utf8
-        ))])
+    func testChatStreamAsksForStreamingAndKeepsTheModelLoadedPastTheStream() async throws {
+        let transport = QueueTransport(stream: .records([
+            contentRecord("Local answer"),
+            finalRecord,
+        ]))
         let client = OllamaClient(transport: transport)
         let messages = [OllamaChatMessage(
             role: "user",
             content: "What owns port 3000?"
         )]
 
-        let response = try await client.chat(
-            model: "qwen3:4b",
-            messages: messages
+        let chunks = try await collect(
+            try await client.chatStream(
+                model: "qwen3:4b",
+                messages: messages
+            )
         )
 
-        XCTAssertEqual(response, "Local answer")
-        let requests = await transport.capturedRequests()
+        XCTAssertEqual(chunks, ["Local answer"])
+        let bufferedRequests = await transport.capturedRequests()
+        XCTAssertTrue(bufferedRequests.isEmpty)
+        let requests = await transport.capturedStreamRequests()
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests[0].path, "/api/chat")
         XCTAssertEqual(requests[0].method, "POST")
         let body = try jsonObject(try XCTUnwrap(requests[0].body))
         XCTAssertNil(body["tools"])
         XCTAssertEqual(body["model"] as? String, "qwen3:4b")
-        XCTAssertEqual(body["stream"] as? Bool, false)
+        XCTAssertEqual(body["stream"] as? Bool, true)
         XCTAssertEqual(body["keep_alive"] as? String, "2m")
+        XCTAssertNotEqual(body["keep_alive"] as? Int, 0)
         XCTAssertEqual(
             body["messages"] as? [[String: String]],
             [["role": "user", "content": "What owns port 3000?"]]
         )
+    }
+
+    func testChatStreamYieldsAssistantChunksInOrderBeforeTheFinalMarker() async throws {
+        let transport = QueueTransport(stream: .records([
+            contentRecord("Hel"),
+            "",
+            "   ",
+            contentRecord(""),
+            contentRecord("lo"),
+            "{\"created_at\":\"2026-08-25T00:00:00Z\"}",
+            contentRecord("!"),
+            finalRecord,
+            contentRecord("must-not-be-yielded"),
+        ]))
+        let client = OllamaClient(transport: transport)
+
+        let chunks = try await collect(
+            try await client.chatStream(
+                model: "qwen3:4b",
+                messages: [.init(role: "user", content: "Explain it")]
+            )
+        )
+
+        XCTAssertEqual(chunks, ["Hel", "lo", "!"])
+    }
+
+    func testChatStreamDeliversTheFirstChunkWhileTheStreamStaysOpen() async throws {
+        let source = ControlledRecordSource()
+        let client = OllamaClient(
+            transport: QueueTransport(stream: .source(source))
+        )
+
+        let stream = try await client.chatStream(
+            model: "qwen3:4b",
+            messages: [.init(role: "user", content: "Explain it")]
+        )
+        var iterator = stream.makeAsyncIterator()
+
+        source.send(contentRecord("Hel"))
+        let first = try await iterator.next()
+        XCTAssertEqual(first, "Hel")
+        let terminatedAfterFirst = await source.isTerminated()
+        XCTAssertFalse(terminatedAfterFirst)
+
+        source.send(contentRecord("lo"))
+        let second = try await iterator.next()
+        XCTAssertEqual(second, "lo")
+
+        source.send(finalRecord)
+        source.finish()
+        let end = try await iterator.next()
+        XCTAssertNil(end)
+    }
+
+    func testChatStreamRejectsAPIErrorRecordWithoutExposingTheServerBody() async throws {
+        let secret = "synthetic-stream-error-must-not-escape"
+        let client = OllamaClient(transport: QueueTransport(stream: .records([
+            contentRecord("Hel"),
+            "{\"error\":\"\(secret)\"}",
+            finalRecord,
+        ])))
+
+        let outcome = await outcome(
+            of: try await client.chatStream(
+                model: "qwen3:4b",
+                messages: []
+            )
+        )
+
+        XCTAssertEqual(outcome.chunks, ["Hel"])
+        XCTAssertEqual(outcome.error as? LocalAIError, .malformedResponse)
+        XCTAssertFalse(String(describing: outcome.error).contains(secret))
+        XCTAssertFalse(String(reflecting: outcome.error).contains(secret))
+    }
+
+    func testChatStreamRejectsUnreadableRecordWithoutExposingIt() async throws {
+        let secret = "synthetic-stream-body-must-not-escape"
+        let client = OllamaClient(transport: QueueTransport(stream: .records([
+            contentRecord("Hel"),
+            "not-json-\(secret)",
+            finalRecord,
+        ])))
+
+        let outcome = await outcome(
+            of: try await client.chatStream(
+                model: "qwen3:4b",
+                messages: []
+            )
+        )
+
+        XCTAssertEqual(outcome.chunks, ["Hel"])
+        XCTAssertEqual(outcome.error as? LocalAIError, .malformedResponse)
+        XCTAssertFalse(String(describing: outcome.error).contains(secret))
+    }
+
+    func testChatStreamRequiresTheFinalDoneRecord() async throws {
+        let client = OllamaClient(transport: QueueTransport(stream: .records([
+            contentRecord("Hel"),
+            contentRecord("lo"),
+        ])))
+
+        let outcome = await outcome(
+            of: try await client.chatStream(
+                model: "qwen3:4b",
+                messages: []
+            )
+        )
+
+        XCTAssertEqual(outcome.chunks, ["Hel", "lo"])
+        XCTAssertEqual(outcome.error as? LocalAIError, .malformedResponse)
+    }
+
+    func testChatStreamMapsCancelledURLErrorMidStreamToCancellation() async throws {
+        let client = OllamaClient(transport: QueueTransport(
+            stream: .recordsThenFailure(
+                [contentRecord("Hel")],
+                URLError(.cancelled)
+            )
+        ))
+
+        let outcome = await outcome(
+            of: try await client.chatStream(
+                model: "qwen3:4b",
+                messages: []
+            )
+        )
+
+        XCTAssertEqual(outcome.chunks, ["Hel"])
+        XCTAssertTrue(
+            outcome.error is CancellationError,
+            "Expected CancellationError, got \(String(describing: outcome.error))"
+        )
+    }
+
+    func testChatStreamMapsMidStreamTransportFailuresToBoundedErrors() async throws {
+        let cases: [(any Error, LocalAIError)] = [
+            (URLError(.cannotConnectToHost), .ollamaNotRunning),
+            (URLError(.timedOut), .timedOut),
+            (URLError(.badServerResponse), .malformedResponse),
+            (OllamaHTTPError(statusCode: 500, hasAPIMessage: true), .malformedResponse),
+        ]
+
+        for (failure, expected) in cases {
+            let client = OllamaClient(transport: QueueTransport(
+                stream: .recordsThenFailure([], failure)
+            ))
+
+            let outcome = await outcome(
+                of: try await client.chatStream(
+                    model: "qwen3:4b",
+                    messages: []
+                )
+            )
+
+            XCTAssertTrue(outcome.chunks.isEmpty)
+            XCTAssertEqual(outcome.error as? LocalAIError, expected)
+        }
+    }
+
+    func testChatStreamMapsFailureToOpenTheStreamToBoundedError() async {
+        let secret = "synthetic-server-secret-must-not-escape"
+        let client = OllamaClient(transport: QueueTransport(
+            stream: .failure(OllamaHTTPError(statusCode: 500, hasAPIMessage: true))
+        ))
+
+        do {
+            _ = try await client.chatStream(
+                model: "qwen3:4b",
+                messages: [.init(role: "user", content: secret)]
+            )
+            XCTFail("Expected HTTP failure")
+        } catch {
+            XCTAssertEqual(error as? LocalAIError, .malformedResponse)
+            XCTAssertFalse(String(describing: error).contains(secret))
+            XCTAssertTrue(Mirror(reflecting: error).children.isEmpty)
+        }
+    }
+
+    func testChatStreamCancellationWhileOpeningTheStreamYieldsCancellation() async {
+        let transport = QueueTransport(stream: .suspendedUntilCancelled)
+        let client = OllamaClient(transport: transport)
+        let started = expectation(description: "chat stream requested")
+
+        let task = Task {
+            started.fulfill()
+            return try await client.chatStream(
+                model: "qwen3:4b",
+                messages: []
+            )
+        }
+        await fulfillment(of: [started], timeout: 5)
+        while await transport.capturedStreamRequests().isEmpty {
+            await Task.yield()
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+    }
+
+    func testChatStreamConsumerCancellationStopsTheUpstreamRecords() async throws {
+        let source = ControlledRecordSource()
+        let client = OllamaClient(
+            transport: QueueTransport(stream: .source(source))
+        )
+        let received = RecordSourceSignal()
+
+        let stream = try await client.chatStream(
+            model: "qwen3:4b",
+            messages: []
+        )
+        let consumer = Task {
+            for try await _ in stream {
+                await received.signal()
+            }
+        }
+        source.send(contentRecord("Hel"))
+        await received.wait()
+
+        let stopped = expectation(description: "upstream records stopped")
+        Task {
+            await source.waitUntilTerminated()
+            stopped.fulfill()
+        }
+        consumer.cancel()
+        await fulfillment(of: [stopped], timeout: 5)
+        _ = try? await consumer.value
+    }
+
+    func testControlCallsAndUnloadStayBufferedBoundedRequests() async throws {
+        let transport = QueueTransport([
+            .success(Data("{\"version\":\"0.11.8\"}".utf8)),
+            .success(localTagsData()),
+            .success(localTagsData()),
+            .success(Data("{\"details\":{\"format\":\"gguf\"}}".utf8)),
+            .success(Data()),
+        ])
+        let client = OllamaClient(transport: transport)
+
+        _ = try await client.version()
+        _ = try await client.localModels()
+        try await client.validateLocalModel("qwen3:4b")
+        await client.unload(model: "qwen3:4b")
+
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(
+            requests.map(\.path),
+            ["/api/version", "/api/tags", "/api/tags", "/api/show", "/api/chat"]
+        )
+        let streamRequests = await transport.capturedStreamRequests()
+        XCTAssertTrue(streamRequests.isEmpty)
     }
 
     func testUnloadUsesEmptyMessagesAndZeroKeepAlive() async throws {
@@ -329,10 +722,7 @@ final class OllamaClientTests: XCTestCase {
         ]))
 
         do {
-            _ = try await client.chat(
-                model: "qwen3:4b",
-                messages: [.init(role: "user", content: secret)]
-            )
+            _ = try await client.validateLocalModel(secret)
             XCTFail("Expected HTTP failure")
         } catch {
             XCTAssertEqual(error as? LocalAIError, .malformedResponse)
@@ -354,6 +744,40 @@ final class OllamaClientTests: XCTestCase {
             XCTAssertEqual(error as? LocalAIError, .malformedResponse)
             XCTAssertFalse(String(describing: error).contains(secret))
             XCTAssertTrue(Mirror(reflecting: error).children.isEmpty)
+        }
+    }
+
+    private var finalRecord: String {
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}"
+    }
+
+    private func contentRecord(_ content: String) -> String {
+        """
+        {"model":"qwen3:4b","message":{"role":"assistant","content":"\(content)"},"done":false}
+        """
+    }
+
+    private func collect(
+        _ stream: LocalAITextStream
+    ) async throws -> [String] {
+        var chunks: [String] = []
+        for try await chunk in stream {
+            chunks.append(chunk)
+        }
+        return chunks
+    }
+
+    private func outcome(
+        of stream: LocalAITextStream
+    ) async -> (chunks: [String], error: (any Error)?) {
+        var chunks: [String] = []
+        do {
+            for try await chunk in stream {
+                chunks.append(chunk)
+            }
+            return (chunks, nil)
+        } catch {
+            return (chunks, error)
         }
     }
 

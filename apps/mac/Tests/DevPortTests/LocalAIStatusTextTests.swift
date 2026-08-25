@@ -35,10 +35,10 @@ private actor StatusTextOllamaClientStub: OllamaClientProtocol {
         throw LocalAIError.ollamaModelUnavailable
     }
 
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         throw LocalAIError.malformedResponse
     }
 

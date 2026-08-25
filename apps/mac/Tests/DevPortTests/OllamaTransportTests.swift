@@ -39,6 +39,47 @@ private enum LoaderResponse: Sendable {
     )
     case nonHTTP
     case cancellation
+
+    func urlResponse(
+        for request: URLRequest,
+        contentLength: Int
+    ) throws -> URLResponse {
+        switch self {
+        case .http(let statusCode, let finalURL):
+            switch finalURL {
+            case .requestURL:
+                return HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            case .explicit(let url):
+                return HTTPURLResponse(
+                    url: url,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            case .missing:
+                return NilURLHTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            }
+        case .nonHTTP:
+            return URLResponse(
+                url: request.url!,
+                mimeType: nil,
+                expectedContentLength: contentLength,
+                textEncodingName: nil
+            )
+        case .cancellation:
+            throw CancellationError()
+        }
+    }
 }
 
 private actor LoaderSpy: OllamaDataLoading {
@@ -54,46 +95,103 @@ private actor LoaderSpy: OllamaDataLoading {
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         requests.append(request)
 
-        switch response {
-        case .http(let statusCode, let finalURL):
-            let response: HTTPURLResponse
-            switch finalURL {
-            case .requestURL:
-                response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!
-            case .explicit(let url):
-                response = HTTPURLResponse(
-                    url: url,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!
-            case .missing:
-                response = NilURLHTTPURLResponse(
-                    url: request.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!
-            }
-            return (data, response)
-        case .nonHTTP:
-            return (
-                data,
-                URLResponse(
-                    url: request.url!,
-                    mimeType: nil,
-                    expectedContentLength: data.count,
-                    textEncodingName: nil
-                )
-            )
-        case .cancellation:
-            throw CancellationError()
+        return (
+            data,
+            try response.urlResponse(for: request, contentLength: data.count)
+        )
+    }
+
+    func capturedRequests() -> [URLRequest] {
+        requests
+    }
+}
+
+private actor AsyncOneShotSignal {
+    private var isSignalled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        isSignalled = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard !isSignalled else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func signalled() -> Bool { isSignalled }
+}
+
+/// A byte source the test drives step by step: nothing arrives until the test
+/// sends it, and the stream stays open until the test finishes it.
+private final class ControlledByteSource: Sendable {
+    let stream: AsyncThrowingStream<Data, any Error>
+    private let continuation: AsyncThrowingStream<Data, any Error>.Continuation
+    private let termination = AsyncOneShotSignal()
+
+    init() {
+        let (stream, continuation) = AsyncThrowingStream<
+            Data,
+            any Error
+        >.makeStream()
+        self.stream = stream
+        self.continuation = continuation
+        let termination = self.termination
+        continuation.onTermination = { _ in
+            Task { await termination.signal() }
         }
+    }
+
+    func send(_ text: String) {
+        continuation.yield(Data(text.utf8))
+    }
+
+    func send(_ data: Data) {
+        continuation.yield(data)
+    }
+
+    func finish() {
+        continuation.finish()
+    }
+
+    func fail(_ error: any Error) {
+        continuation.finish(throwing: error)
+    }
+
+    func waitUntilTerminated() async {
+        await termination.wait()
+    }
+
+    func isTerminated() async -> Bool {
+        await termination.signalled()
+    }
+}
+
+private actor ByteStreamLoaderSpy: OllamaByteStreamLoading {
+    private let response: LoaderResponse
+    private let source: ControlledByteSource
+    private var requests: [URLRequest] = []
+
+    init(
+        response: LoaderResponse = .http(statusCode: 200),
+        source: ControlledByteSource = ControlledByteSource()
+    ) {
+        self.response = response
+        self.source = source
+    }
+
+    func byteStream(
+        for request: URLRequest
+    ) async throws -> (AsyncThrowingStream<Data, any Error>, URLResponse) {
+        requests.append(request)
+
+        return (
+            source.stream,
+            try response.urlResponse(for: request, contentLength: 0)
+        )
     }
 
     func capturedRequests() -> [URLRequest] {
@@ -504,6 +602,437 @@ final class OllamaTransportTests: XCTestCase {
         }
     }
 
+    func testStreamingSessionKeepsNoFiveSecondChatDeadlineAndNoPersistence() {
+        let session = OllamaSessionFactory.makeStreamingSession()
+        let configuration = session.configuration
+
+        XCTAssertFalse(session === URLSession.shared)
+        XCTAssertNil(configuration.urlCache)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertNil(configuration.urlCredentialStorage)
+        XCTAssertNil(configuration.httpAdditionalHeaders)
+        XCTAssertEqual(configuration.connectionProxyDictionary?.count, 0)
+        XCTAssertEqual(
+            configuration.requestCachePolicy,
+            .reloadIgnoringLocalCacheData
+        )
+        XCTAssertNotEqual(configuration.timeoutIntervalForRequest, 5)
+        XCTAssertGreaterThanOrEqual(configuration.timeoutIntervalForRequest, 60)
+        XCTAssertGreaterThanOrEqual(
+            configuration.timeoutIntervalForResource,
+            3600
+        )
+        XCTAssertEqual(
+            OllamaSessionFactory.makeControlSession()
+                .configuration.timeoutIntervalForRequest,
+            5
+        )
+    }
+
+    func testStreamBuildsTheExactChatRequestAndYieldsRecordsInOrder() async throws {
+        let source = ControlledByteSource()
+        let loader = ByteStreamLoaderSpy(source: source)
+        let transport = OllamaTransport.testInstance(
+            streamLoader: loader,
+            endpoint: endpoint
+        )
+        let body = Data("{\"model\":\"qwen3:4b\",\"stream\":true}".utf8)
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: body
+        )
+        source.send("{\"one\":1}\n{\"two\":2}\n{\"three\":3}\n")
+        source.finish()
+
+        let records = try await collect(stream)
+        XCTAssertEqual(
+            records,
+            ["{\"one\":1}", "{\"two\":2}", "{\"three\":3}"]
+        )
+        let requests = await loader.capturedRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].url?.absoluteString, origin + "/api/chat")
+        XCTAssertEqual(requests[0].httpMethod, "POST")
+        XCTAssertEqual(requests[0].httpBody, body)
+        XCTAssertEqual(
+            requests[0].value(forHTTPHeaderField: "Content-Type"),
+            "application/json"
+        )
+    }
+
+    func testStreamDeliversEachRecordWhileTheProducerStaysSuspended() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        var iterator = stream.makeAsyncIterator()
+
+        source.send("{\"index\":1}\n")
+        let first = try await iterator.next()
+        XCTAssertEqual(first.map(text), "{\"index\":1}")
+        var terminated = await source.isTerminated()
+        XCTAssertFalse(terminated)
+
+        source.send("{\"index\":2}\n")
+        let second = try await iterator.next()
+        XCTAssertEqual(second.map(text), "{\"index\":2}")
+        terminated = await source.isTerminated()
+        XCTAssertFalse(terminated)
+
+        source.finish()
+        let end = try await iterator.next()
+        XCTAssertNil(end)
+    }
+
+    func testStreamIgnoresBlankLinesAndCarriageReturns() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        source.send("\n\r\n{\"one\":1}\r\n   \n\t\n{\"two\":2}\r\n\n")
+        source.finish()
+
+        let records = try await collect(stream)
+        XCTAssertEqual(records, ["{\"one\":1}", "{\"two\":2}"])
+    }
+
+    func testStreamReassemblesRecordsSplitAcrossChunksAndFlushesTheLast() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        source.send("{\"one\"")
+        source.send(":1}\n{\"two\"")
+        source.send(":2}")
+        source.finish()
+
+        let records = try await collect(stream)
+        XCTAssertEqual(records, ["{\"one\":1}", "{\"two\":2}"])
+    }
+
+    func testStreamRejectsAnOversizedRecordBeforeYieldingOrDecodingIt() async throws {
+        let secret = "oversized-record-must-not-escape"
+        let oversized = secret + String(
+            repeating: "a",
+            count: OllamaStreamLimits.maxRecordBytes
+        )
+
+        for terminatesLine in [true, false] {
+            let source = ControlledByteSource()
+            let transport = OllamaTransport.testInstance(
+                streamLoader: ByteStreamLoaderSpy(source: source),
+                endpoint: endpoint
+            )
+
+            let stream = try await transport.stream(
+                path: "/api/chat",
+                method: "POST",
+                body: Data("{}".utf8)
+            )
+            source.send(terminatesLine ? oversized + "\n" : oversized)
+
+            let outcome = await outcome(of: stream)
+            XCTAssertTrue(outcome.records.isEmpty, "\(terminatesLine)")
+            XCTAssertEqual(
+                outcome.error as? LocalAIError,
+                .malformedResponse,
+                "\(terminatesLine)"
+            )
+            XCTAssertFalse(
+                String(describing: outcome.error).contains(secret)
+            )
+        }
+    }
+
+    func testStreamRejectsAnOversizedCumulativeResponse() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+        let record = "{\"chunk\":\""
+            + String(repeating: "a", count: 32 * 1024)
+            + "\"}\n"
+        let recordCount = OllamaStreamLimits.maxTotalBytes
+            / record.utf8.count + 1
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        for _ in 0..<recordCount {
+            source.send(record)
+        }
+        source.finish()
+
+        let outcome = await outcome(of: stream)
+        XCTAssertEqual(outcome.error as? LocalAIError, .malformedResponse)
+        XCTAssertLessThan(outcome.records.count, recordCount)
+    }
+
+    func testStreamRejectsUnsafePathsBeforeInvokingTheLoader() async {
+        let loader = ByteStreamLoaderSpy()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: loader,
+            endpoint: endpoint
+        )
+
+        for path in [
+            "",
+            "/",
+            "/api/pull",
+            "/api/create",
+            "/api/push",
+            "/api/web_search",
+            "/api/chat/",
+            "/api/chat?model=remote",
+            "/api/../api/chat",
+            "api/chat",
+            "//ollama.com/api/chat",
+            "http://127.0.0.1:11435/api/chat",
+        ] {
+            do {
+                _ = try await transport.stream(
+                    path: path,
+                    method: "POST",
+                    body: Data("{}".utf8)
+                )
+                XCTFail("Expected unsafe stream path to be rejected: \(path)")
+            } catch {
+                XCTAssertEqual(error as? LocalAIError, .unsafeLocalEndpoint)
+            }
+        }
+
+        let requests = await loader.capturedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testStreamRejectsNonHTTPResponseAsMalformed() async {
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(response: .nonHTTP),
+            endpoint: endpoint
+        )
+
+        do {
+            _ = try await transport.stream(
+                path: "/api/chat",
+                method: "POST",
+                body: Data("{}".utf8)
+            )
+            XCTFail("Expected non-HTTP streamed response to be rejected")
+        } catch {
+            XCTAssertEqual(error as? LocalAIError, .malformedResponse)
+        }
+    }
+
+    func testStreamRejectsFinalResponseURLOutsideLeasedOriginBeforeReturning() async {
+        let unsafeFinalURLs: [FinalResponseURL] = [
+            .explicit(URL(string: "https://ollama.com/api/chat")!),
+            .explicit(URL(string: "http://127.0.0.1:11434/api/chat")!),
+            .explicit(URL(string: "http://localhost:11435/api/chat")!),
+            .explicit(URL(string: "http://127.0.0.1:11435/api/pull")!),
+            .explicit(URL(string: "http://127.0.0.1:11435/api/tags")!),
+            .explicit(URL(string: "not-an-absolute-http-url")!),
+            .missing,
+        ]
+
+        for finalURL in unsafeFinalURLs {
+            let source = ControlledByteSource()
+            source.send("{\"must\":\"not-be-exposed\"}\n")
+            let transport = OllamaTransport.testInstance(
+                streamLoader: ByteStreamLoaderSpy(
+                    response: .http(statusCode: 200, finalURL: finalURL),
+                    source: source
+                ),
+                endpoint: endpoint
+            )
+
+            do {
+                _ = try await transport.stream(
+                    path: "/api/chat",
+                    method: "POST",
+                    body: Data("{}".utf8)
+                )
+                XCTFail("Expected unsafe streamed final URL to be rejected")
+            } catch {
+                XCTAssertEqual(error as? LocalAIError, .unsafeLocalEndpoint)
+            }
+        }
+    }
+
+    func testStreamRejectsEveryRedirectStatusAsUnsafe() async {
+        for statusCode in [300, 302, 307, 308, 399] {
+            let transport = OllamaTransport.testInstance(
+                streamLoader: ByteStreamLoaderSpy(
+                    response: .http(statusCode: statusCode)
+                ),
+                endpoint: endpoint
+            )
+
+            do {
+                _ = try await transport.stream(
+                    path: "/api/chat",
+                    method: "POST",
+                    body: Data("{}".utf8)
+                )
+                XCTFail("Expected streamed status \(statusCode) to be rejected")
+            } catch {
+                XCTAssertEqual(error as? LocalAIError, .unsafeLocalEndpoint)
+            }
+        }
+    }
+
+    func testStreamHTTPErrorContainsOnlyBoundedMetadata() async {
+        let secret = "streamed-request-secret-that-must-not-escape"
+        let source = ControlledByteSource()
+        source.send("{\"error\":\"server echoed \(secret)\"}\n")
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(
+                response: .http(statusCode: 500),
+                source: source
+            ),
+            endpoint: endpoint
+        )
+
+        do {
+            _ = try await transport.stream(
+                path: "/api/chat",
+                method: "POST",
+                body: Data(secret.utf8)
+            )
+            XCTFail("Expected streamed HTTP error")
+        } catch let error as OllamaHTTPError {
+            XCTAssertEqual(error.statusCode, 500)
+            XCTAssertFalse(error.hasAPIMessage)
+            XCTAssertEqual(
+                Set(Mirror(reflecting: error).children.compactMap(\.label)),
+                ["statusCode", "hasAPIMessage"]
+            )
+            XCTAssertFalse(String(describing: error).contains(secret))
+            XCTAssertFalse(String(reflecting: error).contains(secret))
+        } catch {
+            XCTFail("Expected OllamaHTTPError, got \(error)")
+        }
+    }
+
+    func testStreamLoaderCancellationRemainsCancellationError() async {
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(response: .cancellation),
+            endpoint: endpoint
+        )
+
+        do {
+            _ = try await transport.stream(
+                path: "/api/chat",
+                method: "POST",
+                body: Data("{}".utf8)
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+    }
+
+    func testStreamMapsCancelledURLErrorMidStreamToCancellationError() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        source.send("{\"one\":1}\n")
+        source.fail(URLError(.cancelled))
+
+        let outcome = await outcome(of: stream)
+        XCTAssertEqual(outcome.records, ["{\"one\":1}"])
+        XCTAssertTrue(
+            outcome.error is CancellationError,
+            "Expected CancellationError, got \(String(describing: outcome.error))"
+        )
+    }
+
+    func testStreamPropagatesOtherMidStreamFailuresUnchanged() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        source.fail(URLError(.networkConnectionLost))
+
+        let outcome = await outcome(of: stream)
+        XCTAssertTrue(outcome.records.isEmpty)
+        XCTAssertEqual((outcome.error as? URLError)?.code, .networkConnectionLost)
+    }
+
+    func testConsumerCancellationStopsTheUpstreamProducer() async throws {
+        let source = ControlledByteSource()
+        let transport = OllamaTransport.testInstance(
+            streamLoader: ByteStreamLoaderSpy(source: source),
+            endpoint: endpoint
+        )
+        let received = AsyncOneShotSignal()
+
+        let stream = try await transport.stream(
+            path: "/api/chat",
+            method: "POST",
+            body: Data("{}".utf8)
+        )
+        let consumer = Task {
+            for try await _ in stream {
+                await received.signal()
+            }
+        }
+        source.send("{\"one\":1}\n")
+        await received.wait()
+
+        let stopped = expectation(description: "upstream producer stopped")
+        Task {
+            await source.waitUntilTerminated()
+            stopped.fulfill()
+        }
+        consumer.cancel()
+        await fulfillment(of: [stopped], timeout: 5)
+        _ = try? await consumer.value
+    }
+
     func testTransportSourceExposesNoArbitraryOriginOrSharedSessionInitializer() throws {
         let text = try transportSource()
 
@@ -518,6 +1047,34 @@ final class OllamaTransportTests: XCTestCase {
         XCTAssertFalse(
             releaseVisibleSource(in: text).contains("testInstance")
         )
+    }
+
+    private func text(_ record: Data) -> String {
+        String(decoding: record, as: UTF8.self)
+    }
+
+    private func collect(
+        _ stream: AsyncThrowingStream<Data, any Error>
+    ) async throws -> [String] {
+        var records: [String] = []
+        for try await record in stream {
+            records.append(text(record))
+        }
+        return records
+    }
+
+    private func outcome(
+        of stream: AsyncThrowingStream<Data, any Error>
+    ) async -> (records: [String], error: (any Error)?) {
+        var records: [String] = []
+        do {
+            for try await record in stream {
+                records.append(text(record))
+            }
+            return (records, nil)
+        } catch {
+            return (records, error)
+        }
     }
 
     private func transportSource() throws -> String {

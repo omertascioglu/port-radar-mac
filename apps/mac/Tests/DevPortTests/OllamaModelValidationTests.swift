@@ -181,16 +181,10 @@ final class OllamaModelValidationTests: XCTestCase {
         XCTAssertFalse(emptyFormat.confirmsLocalExecution)
     }
 
-    func testDecodesVersionChatResponseAndAPIError() throws {
+    func testDecodesVersionAndAPIError() throws {
         let version = try JSONDecoder().decode(
             OllamaVersionResponse.self,
             from: Data("{\"version\":\"0.11.8\"}".utf8)
-        )
-        let chat = try JSONDecoder().decode(
-            OllamaChatResponse.self,
-            from: Data(
-                "{\"message\":{\"role\":\"assistant\",\"content\":\"Local answer\"}}".utf8
-            )
         )
         let apiError = try JSONDecoder().decode(
             OllamaAPIErrorResponse.self,
@@ -198,15 +192,80 @@ final class OllamaModelValidationTests: XCTestCase {
         )
 
         XCTAssertEqual(version.version, "0.11.8")
-        XCTAssertEqual(chat.message, .init(role: "assistant", content: "Local answer"))
         XCTAssertEqual(apiError.error, "synthetic error")
+    }
+
+    func testDecodesStreamedContentChunkAheadOfTheFinalMarker() throws {
+        let chunk = try decodeStreamChunk(
+            """
+            {
+              "model":"qwen3:4b",
+              "created_at":"2026-08-25T00:00:00Z",
+              "message":{"role":"assistant","content":"Hel"},
+              "done":false
+            }
+            """
+        )
+
+        XCTAssertEqual(chunk.content, "Hel")
+        XCTAssertFalse(chunk.isFinal)
+        XCTAssertFalse(chunk.hasAPIError)
+    }
+
+    func testDecodesFinalStreamedMarkerWithoutContent() throws {
+        let chunk = try decodeStreamChunk(
+            """
+            {"message":{"role":"assistant","content":""},"done":true}
+            """
+        )
+
+        XCTAssertNil(chunk.content)
+        XCTAssertTrue(chunk.isFinal)
+        XCTAssertFalse(chunk.hasAPIError)
+    }
+
+    func testDecodesStreamedChunkWithEveryFieldAbsent() throws {
+        let empty = try decodeStreamChunk("{}")
+        let messageOnly = try decodeStreamChunk("{\"message\":{}}")
+
+        for chunk in [empty, messageOnly] {
+            XCTAssertNil(chunk.content)
+            XCTAssertFalse(chunk.isFinal)
+            XCTAssertFalse(chunk.hasAPIError)
+        }
+    }
+
+    func testStreamedAPIErrorChunkKeepsNoRawServerText() throws {
+        let secret = "synthetic-stream-error-must-not-escape"
+
+        let chunk = try decodeStreamChunk("{\"error\":\"\(secret)\"}")
+
+        XCTAssertTrue(chunk.hasAPIError)
+        XCTAssertNil(chunk.content)
+        XCTAssertFalse(chunk.isFinal)
+        XCTAssertFalse(String(describing: chunk).contains(secret))
+        XCTAssertFalse(String(reflecting: chunk).contains(secret))
+        XCTAssertFalse(
+            try decodeStreamChunk("{\"error\":\"\"}").hasAPIError
+        )
+    }
+
+    func testRejectsStreamedChunkWithUnreadableFields() throws {
+        for json in [
+            "{\"done\":\"true\"}",
+            "{\"error\":42}",
+            "{\"message\":\"assistant\"}",
+            "not-json",
+        ] {
+            XCTAssertThrowsError(try decodeStreamChunk(json), json)
+        }
     }
 
     func testChatRequestExcludesToolsAndEncodesDurationKeepAlive() throws {
         let request = OllamaChatRequest(
             model: "qwen3:4b",
             messages: [.init(role: "user", content: "What owns port 3000?")],
-            stream: false,
+            stream: true,
             keepAlive: .duration("2m")
         )
 
@@ -218,7 +277,7 @@ final class OllamaModelValidationTests: XCTestCase {
         )
         XCTAssertNil(object["tools"])
         XCTAssertEqual(object["model"] as? String, "qwen3:4b")
-        XCTAssertEqual(object["stream"] as? Bool, false)
+        XCTAssertEqual(object["stream"] as? Bool, true)
         XCTAssertEqual(object["keep_alive"] as? String, "2m")
         let messages = try XCTUnwrap(object["messages"] as? [[String: String]])
         XCTAssertEqual(messages, [["role": "user", "content": "What owns port 3000?"]])
@@ -247,6 +306,15 @@ final class OllamaModelValidationTests: XCTestCase {
         try JSONDecoder().decode(
             OllamaTagsResponse.self,
             from: Data("{\"models\":[\(modelJSON)]}".utf8)
+        )
+    }
+
+    private func decodeStreamChunk(
+        _ json: String
+    ) throws -> OllamaChatStreamChunk {
+        try JSONDecoder().decode(
+            OllamaChatStreamChunk.self,
+            from: Data(json.utf8)
         )
     }
 

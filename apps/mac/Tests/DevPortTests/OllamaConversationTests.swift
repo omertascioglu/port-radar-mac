@@ -12,6 +12,14 @@ private enum SyntheticClientError: Error, Sendable {
     case failed
 }
 
+/// One finished reply delivered as a single streamed chunk.
+private func finishedTextStream(_ text: String) -> LocalAITextStream {
+    LocalAITextStream { continuation in
+        continuation.yield(text)
+        continuation.finish()
+    }
+}
+
 private struct OllamaClientSpySnapshot: Equatable, Sendable {
     let validationModelIDs: [String]
     let chatModelIDs: [String]
@@ -48,16 +56,17 @@ private actor OllamaClientSpy: OllamaClientProtocol {
         }
     }
 
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         chatModelIDs.append(model)
         chatMessages.append(messages)
         resumeChatCountWaiters()
-        return try await withCheckedThrowingContinuation { continuation in
+        let reply = try await withCheckedThrowingContinuation { continuation in
             pendingChats.append(continuation)
         }
+        return finishedTextStream(reply)
     }
 
     func unload(model: String) async {
@@ -131,12 +140,12 @@ private actor ModelChangeClient: OllamaClientProtocol {
         }
     }
 
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         chatMessages.append(messages)
-        return "Local answer"
+        return finishedTextStream("Local answer")
     }
 
     func unload(model: String) async {}
@@ -169,22 +178,23 @@ private actor ControlledChatLifecycleClient: OllamaClientProtocol {
     func localModels() async throws -> [OllamaModel] { [] }
     func validateLocalModel(_ id: String) async throws {}
 
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         chatCalls += 1
         let waiters = chatStartWaiters
         chatStartWaiters.removeAll()
         waiters.forEach { $0.resume() }
 
-        return try await withTaskCancellationHandler {
+        let reply = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 chatContinuation = continuation
             }
         } onCancel: {
             Task { await self.recordChatCancellation() }
         }
+        return finishedTextStream(reply)
     }
 
     func unload(model: String) async {
@@ -257,13 +267,13 @@ private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
         }
     }
 
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         chatCalls += 1
         signalRequestStarted()
-        return "Privacy boundary bypassed"
+        return finishedTextStream("Privacy boundary bypassed")
     }
 
     func unload(model: String) async {

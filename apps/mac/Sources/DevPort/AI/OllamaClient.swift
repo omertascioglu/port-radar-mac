@@ -1,14 +1,17 @@
 // Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.
 import Foundation
 
+/// Incremental assistant text from a local model, in emission order.
+typealias LocalAITextStream = AsyncThrowingStream<String, any Error>
+
 protocol OllamaClientProtocol: Sendable {
     func version() async throws -> String
     func localModels() async throws -> [OllamaModel]
     func validateLocalModel(_ id: String) async throws
-    func chat(
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String
+    ) async throws -> LocalAITextStream
     func unload(model: String) async
 }
 
@@ -78,23 +81,64 @@ struct OllamaClient: OllamaClientProtocol, Sendable {
         }
     }
 
-    func chat(
+    /// Streams one chat turn. The model stays loaded for two minutes so it is
+    /// never unloaded while the stream is still open, and the caller sees only
+    /// assistant text — never a raw record, status, or server message.
+    func chatStream(
         model: String,
         messages: [OllamaChatMessage]
-    ) async throws -> String {
+    ) async throws -> LocalAITextStream {
         let chatRequest = OllamaChatRequest(
             model: model,
             messages: messages,
-            stream: false,
+            stream: true,
             keepAlive: .duration("2m")
         )
-        let data = try await request(
-            path: "/api/chat",
-            method: "POST",
-            body: try encode(chatRequest)
-        )
-        return try decode(OllamaChatResponse.self, from: data)
-            .message.content
+        let body = try encode(chatRequest)
+        let records: AsyncThrowingStream<Data, any Error>
+        do {
+            records = try await transport.stream(
+                path: "/api/chat",
+                method: "POST",
+                body: body
+            )
+        } catch {
+            throw mapped(error)
+        }
+
+        return LocalAITextStream { continuation in
+            let task = Task {
+                var sawFinalRecord = false
+                do {
+                    for try await record in records {
+                        try Task.checkCancellation()
+                        guard !record.isBlankRecord else { continue }
+                        let chunk = try decode(
+                            OllamaChatStreamChunk.self,
+                            from: record
+                        )
+                        guard !chunk.hasAPIError else {
+                            throw LocalAIError.malformedResponse
+                        }
+                        if let content = chunk.content {
+                            continuation.yield(content)
+                        }
+                        if chunk.isFinal {
+                            sawFinalRecord = true
+                            break
+                        }
+                    }
+                    try Task.checkCancellation()
+                    guard sawFinalRecord else {
+                        throw LocalAIError.malformedResponse
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: mapped(error))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     func unload(model: String) async {
@@ -125,28 +169,36 @@ struct OllamaClient: OllamaClientProtocol, Sendable {
                 method: method,
                 body: body
             )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as URLError {
+        } catch {
+            throw mapped(error)
+        }
+    }
+
+    /// Keeps every failure bounded: cancellation stays cancellation and
+    /// anything else collapses to a fixed local error that carries no server
+    /// text.
+    private func mapped(_ error: any Error) -> any Error {
+        if error is CancellationError {
+            return CancellationError()
+        }
+        if let error = error as? URLError {
             switch error.code {
             case .cancelled:
-                throw CancellationError()
+                return CancellationError()
             case .notConnectedToInternet,
                  .cannotConnectToHost,
                  .networkConnectionLost:
-                throw LocalAIError.ollamaNotRunning
+                return LocalAIError.ollamaNotRunning
             case .timedOut:
-                throw LocalAIError.timedOut
+                return LocalAIError.timedOut
             default:
-                throw LocalAIError.malformedResponse
+                return LocalAIError.malformedResponse
             }
-        } catch let error as LocalAIError {
-            throw error
-        } catch is OllamaHTTPError {
-            throw LocalAIError.malformedResponse
-        } catch {
-            throw LocalAIError.malformedResponse
         }
+        if let error = error as? LocalAIError {
+            return error
+        }
+        return LocalAIError.malformedResponse
     }
 
     private func encode<T: Encodable>(_ value: T) throws -> Data {
@@ -165,6 +217,16 @@ struct OllamaClient: OllamaClientProtocol, Sendable {
             return try JSONDecoder().decode(type, from: data)
         } catch {
             throw LocalAIError.malformedResponse
+        }
+    }
+}
+
+private extension Data {
+    /// True when a record carries nothing but newline framing whitespace.
+    var isBlankRecord: Bool {
+        allSatisfy { byte in
+            byte == 0x09 || byte == 0x0A || byte == 0x0B
+                || byte == 0x0C || byte == 0x0D || byte == 0x20
         }
     }
 }

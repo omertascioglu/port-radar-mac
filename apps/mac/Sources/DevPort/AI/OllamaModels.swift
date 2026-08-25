@@ -1,3 +1,4 @@
+// Modification notice: Added in 2026 for the local AI and optional Ollama fallback contribution, and changed for the Port Radar Offline fork's streamed local responses.
 import Foundation
 
 struct OllamaModel: Identifiable, Equatable, Sendable {
@@ -99,8 +100,38 @@ struct OllamaChatRequest: Encodable, Equatable, Sendable {
     }
 }
 
-struct OllamaChatResponse: Decodable, Equatable, Sendable {
-    let message: OllamaChatMessage
+private struct OllamaChatStreamMessage: Decodable, Equatable, Sendable {
+    let content: String?
+}
+
+/// One newline-delimited record of a streamed `/api/chat` response. The server's
+/// `error` text is deliberately reduced to a flag while decoding so no raw
+/// server body can reach an error, a log, or the UI.
+struct OllamaChatStreamChunk: Decodable, Equatable, Sendable {
+    let content: String?
+    let isFinal: Bool
+    let hasAPIError: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case done
+        case error
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let message = try container.decodeIfPresent(
+            OllamaChatStreamMessage.self,
+            forKey: .message
+        )
+        let text = message?.content ?? ""
+        content = text.isEmpty ? nil : text
+        isFinal = try container.decodeIfPresent(Bool.self, forKey: .done)
+            ?? false
+        hasAPIError = !(
+            try container.decodeIfPresent(String.self, forKey: .error) ?? ""
+        ).isEmpty
+    }
 }
 
 struct OllamaAPIErrorResponse: Decodable, Equatable, Sendable {

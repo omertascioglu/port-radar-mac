@@ -96,9 +96,11 @@ actor OllamaConversation: LocalAIConversation {
             try Task.checkCancellation()
             try authorizeChatStart(requestID: requestID)
             try Task.checkCancellation()
-            return try await client.chat(
-                model: modelID,
-                messages: candidate
+            return try await Self.joined(
+                try await client.chatStream(
+                    model: modelID,
+                    messages: candidate
+                )
             )
         }
         activeRequestID = requestID
@@ -157,6 +159,19 @@ actor OllamaConversation: LocalAIConversation {
         await cleanup.value
         didFinishClose = true
         closeTask = nil
+    }
+
+    /// Interim adapter: this turn still hands the caller one finished reply, so
+    /// the streamed chunks are joined here. Exposing the stream through the
+    /// provider-neutral conversation API is owned by Task 8.
+    private static func joined(_ stream: LocalAITextStream) async throws -> String {
+        var reply = ""
+        for try await chunk in stream {
+            try Task.checkCancellation()
+            reply += chunk
+        }
+        try Task.checkCancellation()
+        return reply
     }
 
     private func authorizeChatStart(requestID: UUID) throws {
