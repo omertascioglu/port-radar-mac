@@ -1,11 +1,19 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.
 import Foundation
 
 struct OllamaProvider: LocalAIProvider {
     let id: LocalAIProviderID = .ollama
-    let client: any OllamaClientProtocol
+    private let clientProvider: OllamaClientProviding
 
-    init(client: any OllamaClientProtocol = OllamaClient()) {
-        self.client = client
+    init(
+        clientProvider: @escaping OllamaClientProviding =
+            PrivateServiceOllamaClient.provider
+    ) {
+        self.clientProvider = clientProvider
+    }
+
+    init(client: any OllamaClientProtocol) {
+        self.init(clientProvider: { client })
     }
 
     func availability(modelID: String?) async -> LocalAIAvailability {
@@ -13,7 +21,7 @@ struct OllamaProvider: LocalAIProvider {
             return .unavailable(.ollamaModelRequired)
         }
         do {
-            try await client.validateLocalModel(modelID)
+            try await clientProvider().validateLocalModel(modelID)
             return .available
         } catch let error as LocalAIError {
             return .unavailable(error)
@@ -29,6 +37,7 @@ struct OllamaProvider: LocalAIProvider {
         guard let modelID, !modelID.isEmpty else {
             throw LocalAIError.ollamaModelRequired
         }
+        let client = try await clientProvider()
         try await client.validateLocalModel(modelID)
         return OllamaConversation(
             client: client,

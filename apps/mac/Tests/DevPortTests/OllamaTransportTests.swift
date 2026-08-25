@@ -101,58 +101,124 @@ private actor LoaderSpy: OllamaDataLoading {
     }
 }
 
+private enum TransportSourceError: Error {
+    case missingSource(String)
+}
+
 final class OllamaTransportTests: XCTestCase {
-    private let policy = OllamaOriginPolicy()
+    private let lease = OllamaServiceLease.testInstance(
+        endpoint: OllamaServiceEndpoint(
+            baseURL: URL(string: "http://127.0.0.1:11435")!,
+            processIdentifier: 4321
+        )
+    )
+    private var endpoint: OllamaServiceEndpoint { lease.endpoint }
+    private var origin: String { lease.endpoint.baseURL.absoluteString }
+    private var policy: OllamaOriginPolicy {
+        OllamaOriginPolicy(endpoint: lease.endpoint)
+    }
 
-    func testAllowsOnlyExactOriginAndKnownPaths() {
-        let allowed = [
-            "http://127.0.0.1:11434/api/version",
-            "http://127.0.0.1:11434/api/tags",
-            "http://127.0.0.1:11434/api/show",
-            "http://127.0.0.1:11434/api/chat",
-        ]
-        let rejected = [
-            "https://127.0.0.1:11434/api/chat",
-            "http://localhost:11434/api/chat",
-            "http://127.0.0.1:11435/api/chat",
-            "http://127.0.0.1:011434/api/chat",
-            "http://ollama.com/api/chat",
-            "http://127.0.0.1:11434/api/pull",
-            "http://user@127.0.0.1:11434/api/chat",
-            "http://user:password@127.0.0.1:11434/api/chat",
-            "http://127.0.0.1:11434/api/chat?model=remote",
-            "http://127.0.0.1:11434/api/chat#remote",
-            "http://127.0.0.1:11434/api/chat/",
-            "http://127.0.0.1:11434/api%2Fchat",
-            "http://127.0.0.1:11434/api/../api/chat",
-        ]
-
-        for url in allowed {
-            XCTAssertTrue(policy.allows(URL(string: url)!), url)
+    func testAllowsOnlyTheLeasedOriginAndControlPaths() {
+        for path in ["/api/version", "/api/tags", "/api/show", "/api/chat"] {
+            XCTAssertTrue(
+                policy.allows(URL(string: origin + path)!, path: path),
+                path
+            )
         }
-        for url in rejected {
-            XCTAssertFalse(policy.allows(URL(string: url)!), url)
+
+        let rejected: [(url: String, path: String)] = [
+            ("https://127.0.0.1:11435/api/chat", "/api/chat"),
+            ("http://localhost:11435/api/chat", "/api/chat"),
+            ("http://[::1]:11435/api/chat", "/api/chat"),
+            ("http://127.0.0.2:11435/api/chat", "/api/chat"),
+            ("http://0.0.0.0:11435/api/chat", "/api/chat"),
+            ("http://10.0.0.5:11435/api/chat", "/api/chat"),
+            ("http://ollama.com/api/chat", "/api/chat"),
+            ("http://ollama.com:11435/api/chat", "/api/chat"),
+            ("http://127.0.0.1:11436/api/chat", "/api/chat"),
+            ("http://127.0.0.1:011435/api/chat", "/api/chat"),
+            ("http://127.0.0.1/api/chat", "/api/chat"),
+            ("http://user@127.0.0.1:11435/api/chat", "/api/chat"),
+            ("http://user:password@127.0.0.1:11435/api/chat", "/api/chat"),
+            ("http://127.0.0.1:11435/api/chat?model=remote", "/api/chat"),
+            ("http://127.0.0.1:11435/api/chat#remote", "/api/chat"),
+            ("http://127.0.0.1:11435/api/chat/", "/api/chat/"),
+            ("http://127.0.0.1:11435/api%2Fchat", "/api/chat"),
+            ("http://127.0.0.1:11435/api/../api/chat", "/api/chat"),
+            ("http://127.0.0.1:11435/api/pull", "/api/pull"),
+            ("http://127.0.0.1:11435/api/create", "/api/create"),
+            ("http://127.0.0.1:11435/api/delete", "/api/delete"),
+            ("http://127.0.0.1:11435/api/push", "/api/push"),
+            ("http://127.0.0.1:11435/api/web_search", "/api/web_search"),
+            ("http://127.0.0.1:11435/api/web_fetch", "/api/web_fetch"),
+            ("http://127.0.0.1:11435/api/unknown", "/api/unknown"),
+            ("http://127.0.0.1:11435/", "/"),
+            ("http://127.0.0.1:11435/api/chat", "/api/tags"),
+            ("http://127.0.0.1:11435/api/tags", "/api/pull"),
+        ]
+
+        for candidate in rejected {
+            XCTAssertFalse(
+                policy.allows(
+                    URL(string: candidate.url)!,
+                    path: candidate.path
+                ),
+                "\(candidate.url) as \(candidate.path)"
+            )
         }
     }
 
-    func testRedirectPolicyUsesTheSameExactBoundary() {
-        XCTAssertTrue(policy.allowsRedirect(to: URL(string:
-            "http://127.0.0.1:11434/api/chat")!))
-        XCTAssertFalse(policy.allowsRedirect(to: URL(string:
-            "https://ollama.com/api/chat")!))
-        XCTAssertFalse(policy.allowsRedirect(to: URL(string:
-            "http://127.0.0.1:11434/api/pull")!))
-        XCTAssertFalse(policy.allowsRedirect(to: URL(string:
-            "http://127.0.0.1:11434/api/chat?redirect=true")!))
+    func testRejectsTheGloballyRunningOllamaPortWhileLeasedToThePrivateService() {
+        XCTAssertFalse(policy.allows(
+            URL(string: "http://127.0.0.1:11434/api/chat")!,
+            path: "/api/chat"
+        ))
+        XCTAssertFalse(policy.allows(
+            URL(string: "http://localhost:11434/api/tags")!,
+            path: "/api/tags"
+        ))
     }
 
-    func testSessionDisablesPersistenceCredentialsAndProxying() {
-        let session = OllamaSessionFactory.make()
+    func testAllowsNothingWhenTheEndpointIsNotAPrivateLoopbackOrigin() {
+        let unsafeOrigins = [
+            "https://127.0.0.1:11435",
+            "http://localhost:11435",
+            "http://ollama.com:11435",
+            "http://user@127.0.0.1:11435",
+            "http://127.0.0.1:11435/api",
+            "http://127.0.0.1",
+        ]
+
+        for unsafeOrigin in unsafeOrigins {
+            let policy = OllamaOriginPolicy(
+                endpoint: OllamaServiceEndpoint(
+                    baseURL: URL(string: unsafeOrigin)!,
+                    processIdentifier: 99
+                )
+            )
+
+            for path in ["/api/version", "/api/tags", "/api/show", "/api/chat"] {
+                XCTAssertFalse(
+                    policy.allows(
+                        URL(string: unsafeOrigin + path)!,
+                        path: path
+                    ),
+                    "\(unsafeOrigin)\(path)"
+                )
+            }
+        }
+    }
+
+    func testControlSessionDisablesPersistenceCredentialsAndProxying() {
+        let session = OllamaSessionFactory.makeControlSession()
         let configuration = session.configuration
 
+        XCTAssertFalse(session === URLSession.shared)
         XCTAssertNil(configuration.urlCache)
         XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
         XCTAssertNil(configuration.urlCredentialStorage)
+        XCTAssertNil(configuration.httpAdditionalHeaders)
         XCTAssertEqual(configuration.connectionProxyDictionary?.count, 0)
         XCTAssertEqual(
             configuration.requestCachePolicy,
@@ -162,35 +228,35 @@ final class OllamaTransportTests: XCTestCase {
         XCTAssertEqual(configuration.timeoutIntervalForResource, 120)
     }
 
-    func testRedirectDelegateAllowsOnlyPolicyApprovedDestinations() async {
+    func testRedirectDelegateRejectsEveryRedirectIncludingTheSameOrigin() async {
         let delegate = OllamaRedirectDelegate()
         let session = URLSession(configuration: .ephemeral)
-        let task = session.dataTask(with: URL(string:
-            "http://127.0.0.1:11434/api/chat")!)
+        let task = session.dataTask(with: URL(string: origin + "/api/chat")!)
         let response = HTTPURLResponse(
-            url: URL(string: "http://127.0.0.1:11434/api/chat")!,
+            url: URL(string: origin + "/api/chat")!,
             statusCode: 302,
             httpVersion: nil,
             headerFields: nil
         )!
+        let destinations = [
+            origin + "/api/chat",
+            origin + "/api/tags",
+            origin + "/api/pull",
+            "http://127.0.0.1:11434/api/chat",
+            "https://ollama.com/api/chat",
+        ]
 
-        let allowed = await redirectedRequest(
-            delegate: delegate,
-            session: session,
-            task: task,
-            response: response,
-            destination: "http://127.0.0.1:11434/api/tags"
-        )
-        let rejected = await redirectedRequest(
-            delegate: delegate,
-            session: session,
-            task: task,
-            response: response,
-            destination: "http://127.0.0.1:11434/api/pull"
-        )
+        for destination in destinations {
+            let redirected = await redirectedRequest(
+                delegate: delegate,
+                session: session,
+                task: task,
+                response: response,
+                destination: destination
+            )
 
-        XCTAssertEqual(allowed?.url?.path, "/api/tags")
-        XCTAssertNil(rejected)
+            XCTAssertNil(redirected, destination)
+        }
     }
 
     func testRedirectDelegateCancelsAuthenticationChallenges() async {
@@ -209,8 +275,7 @@ final class OllamaTransportTests: XCTestCase {
 
     func testRedirectDelegateCancelsTaskAuthenticationChallenges() async {
         let session = URLSession(configuration: .ephemeral)
-        let task = session.dataTask(with: URL(string:
-            "http://127.0.0.1:11434/api/chat")!)
+        let task = session.dataTask(with: URL(string: origin + "/api/chat")!)
 
         let result = await withCheckedContinuation { continuation in
             OllamaRedirectDelegate().urlSession(
@@ -226,9 +291,18 @@ final class OllamaTransportTests: XCTestCase {
         XCTAssertNil(result.1)
     }
 
+    func testLeaseBoundTransportUsesOnlyTheLeasedEndpoint() {
+        let transport = OllamaTransport(lease: lease)
+
+        XCTAssertEqual(transport.endpointForTesting, endpoint)
+    }
+
     func testBuildsExactRequestsAndAddsJSONContentTypeOnlyWithBody() async throws {
         let loader = LoaderSpy(data: Data("success".utf8))
-        let transport = OllamaTransport.testInstance(loader: loader)
+        let transport = OllamaTransport.testInstance(
+            loader: loader,
+            endpoint: endpoint
+        )
         let body = Data("{\"model\":\"qwen3:4b\"}".utf8)
 
         let postData = try await transport.request(
@@ -243,7 +317,7 @@ final class OllamaTransportTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(
             requests[0].url?.absoluteString,
-            "http://127.0.0.1:11434/api/chat"
+            origin + "/api/chat"
         )
         XCTAssertEqual(requests[0].httpMethod, "POST")
         XCTAssertEqual(requests[0].httpBody, body)
@@ -253,7 +327,7 @@ final class OllamaTransportTests: XCTestCase {
         )
         XCTAssertEqual(
             requests[1].url?.absoluteString,
-            "http://127.0.0.1:11434/api/tags"
+            origin + "/api/tags"
         )
         XCTAssertEqual(requests[1].httpMethod, "GET")
         XCTAssertNil(requests[1].httpBody)
@@ -262,14 +336,28 @@ final class OllamaTransportTests: XCTestCase {
 
     func testRejectsUnsafePathBeforeInvokingLoader() async {
         let loader = LoaderSpy()
-        let transport = OllamaTransport.testInstance(loader: loader)
+        let transport = OllamaTransport.testInstance(
+            loader: loader,
+            endpoint: endpoint
+        )
         let unsafePaths = [
+            "",
+            "/",
             "/api/pull",
+            "/api/create",
+            "/api/delete",
+            "/api/push",
+            "/api/web_search",
+            "/api/web_fetch",
+            "/api/unknown",
+            "/api/chat/",
+            "/api/chat?model=remote",
+            "/api/chat#remote",
             "/api/../api/chat",
             "/api%2Fchat",
             "api/chat",
             "//ollama.com/api/chat",
-            "http://127.0.0.1:11434/api/chat",
+            "http://127.0.0.1:11435/api/chat",
         ]
 
         for path in unsafePaths {
@@ -287,7 +375,8 @@ final class OllamaTransportTests: XCTestCase {
 
     func testRejectsNonHTTPResponseAsMalformed() async {
         let transport = OllamaTransport.testInstance(
-            loader: LoaderSpy(response: .nonHTTP)
+            loader: LoaderSpy(response: .nonHTTP),
+            endpoint: endpoint
         )
 
         do {
@@ -298,13 +387,13 @@ final class OllamaTransportTests: XCTestCase {
         }
     }
 
-    func testRejectsFinalResponseURLOutsideLocalPolicyBeforeReturningData() async {
+    func testRejectsFinalResponseURLOutsideLeasedOriginBeforeReturningData() async {
         let unsafeFinalURLs: [FinalResponseURL] = [
             .explicit(URL(string: "https://ollama.com/api/chat")!),
-            .explicit(URL(string:
-                "http://127.0.0.1:11435/api/chat")!),
-            .explicit(URL(string:
-                "http://127.0.0.1:11434/api/pull")!),
+            .explicit(URL(string: "http://127.0.0.1:11434/api/chat")!),
+            .explicit(URL(string: "http://localhost:11435/api/chat")!),
+            .explicit(URL(string: "http://127.0.0.1:11435/api/pull")!),
+            .explicit(URL(string: "http://127.0.0.1:11435/api/tags")!),
             .explicit(URL(string: "not-an-absolute-http-url")!),
             .missing,
         ]
@@ -314,7 +403,10 @@ final class OllamaTransportTests: XCTestCase {
                 response: .http(statusCode: 200, finalURL: finalURL),
                 data: Data("must-not-be-returned".utf8)
             )
-            let transport = OllamaTransport.testInstance(loader: loader)
+            let transport = OllamaTransport.testInstance(
+                loader: loader,
+                endpoint: endpoint
+            )
 
             do {
                 _ = try await transport.request(path: "/api/chat")
@@ -328,7 +420,8 @@ final class OllamaTransportTests: XCTestCase {
     func testRejectsEveryRedirectStatusAsUnsafe() async {
         for statusCode in [300, 302, 307, 308, 399] {
             let transport = OllamaTransport.testInstance(
-                loader: LoaderSpy(response: .http(statusCode: statusCode))
+                loader: LoaderSpy(response: .http(statusCode: statusCode)),
+                endpoint: endpoint
             )
 
             do {
@@ -344,7 +437,8 @@ final class OllamaTransportTests: XCTestCase {
         let secret = "request-secret-that-must-not-escape"
         let body = Data("{\"error\":\"server echoed \(secret)\"}".utf8)
         let transport = OllamaTransport.testInstance(
-            loader: LoaderSpy(response: .http(statusCode: 500), data: body)
+            loader: LoaderSpy(response: .http(statusCode: 500), data: body),
+            endpoint: endpoint
         )
 
         do {
@@ -378,7 +472,8 @@ final class OllamaTransportTests: XCTestCase {
 
         for (data, expectedHasMessage) in cases {
             let transport = OllamaTransport.testInstance(
-                loader: LoaderSpy(response: .http(statusCode: 404), data: data)
+                loader: LoaderSpy(response: .http(statusCode: 404), data: data),
+                endpoint: endpoint
             )
 
             do {
@@ -395,7 +490,8 @@ final class OllamaTransportTests: XCTestCase {
 
     func testLoaderCancellationRemainsCancellationError() async {
         let transport = OllamaTransport.testInstance(
-            loader: LoaderSpy(response: .cancellation)
+            loader: LoaderSpy(response: .cancellation),
+            endpoint: endpoint
         )
 
         do {
@@ -406,6 +502,60 @@ final class OllamaTransportTests: XCTestCase {
         } catch {
             XCTFail("Expected CancellationError, got \(error)")
         }
+    }
+
+    func testTransportSourceExposesNoArbitraryOriginOrSharedSessionInitializer() throws {
+        let text = try transportSource()
+
+        XCTAssertFalse(text.contains("11434"))
+        XCTAssertFalse(text.contains("URLSession.shared"))
+        XCTAssertFalse(text.contains("static let baseURL"))
+        XCTAssertEqual(
+            releaseVisibleInitializers(in: text),
+            ["init(lease: OllamaServiceLease) {"]
+        )
+        XCTAssertTrue(text.contains("#if DEBUG"))
+        XCTAssertFalse(
+            releaseVisibleSource(in: text).contains("testInstance")
+        )
+    }
+
+    private func transportSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevPort/AI/OllamaTransport.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw TransportSourceError.missingSource(url.path)
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func releaseVisibleSource(in text: String) -> String {
+        var isDebugOnly = false
+        return text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed == "#if DEBUG" {
+                    isDebugOnly = true
+                    return false
+                }
+                if isDebugOnly, trimmed == "#endif" {
+                    isDebugOnly = false
+                    return false
+                }
+                return !isDebugOnly
+            }
+            .joined(separator: "\n")
+    }
+
+    private func releaseVisibleInitializers(in text: String) -> [String] {
+        releaseVisibleSource(in: text)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("init(") }
     }
 
     private func redirectedRequest(
@@ -431,7 +581,7 @@ final class OllamaTransportTests: XCTestCase {
         URLAuthenticationChallenge(
             protectionSpace: URLProtectionSpace(
                 host: "127.0.0.1",
-                port: 11434,
+                port: 11435,
                 protocol: "http",
                 realm: nil,
                 authenticationMethod: NSURLAuthenticationMethodHTTPBasic

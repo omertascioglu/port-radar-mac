@@ -1,7 +1,7 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.
 import Foundation
 
 struct OllamaOriginPolicy: Sendable {
-    static let baseURL = URL(string: "http://127.0.0.1:11434")!
     static let allowedPaths: Set<String> = [
         "/api/version",
         "/api/tags",
@@ -9,29 +9,71 @@ struct OllamaOriginPolicy: Sendable {
         "/api/chat",
     ]
 
-    func allows(_ url: URL) -> Bool {
-        guard let components = URLComponents(
-            url: url,
-            resolvingAgainstBaseURL: true
-        ) else {
+    private static let loopbackHost = "127.0.0.1"
+
+    let endpoint: OllamaServiceEndpoint
+
+    /// Accepts only `<leased origin><path>` for one allowlisted control path.
+    func allows(_ url: URL, path: String) -> Bool {
+        guard Self.allowedPaths.contains(path),
+              let origin = leasedOrigin(),
+              let components = URLComponents(
+                url: url,
+                resolvingAgainstBaseURL: true
+              )
+        else {
             return false
         }
-        let expectedURLString = Self.baseURL.absoluteString + components.path
 
         return components.scheme == "http"
-            && components.host == "127.0.0.1"
-            && components.port == 11434
-            && Self.allowedPaths.contains(components.path)
-            && components.percentEncodedPath == components.path
-            && url.absoluteString == expectedURLString
+            && components.host == Self.loopbackHost
+            && components.port == origin.port
+            && components.path == path
+            && components.percentEncodedPath == path
             && components.user == nil
             && components.password == nil
             && components.query == nil
             && components.fragment == nil
+            && url.absoluteString == origin.absoluteString + path
     }
 
-    func allowsRedirect(to url: URL) -> Bool {
-        allows(url)
+    /// The request URL for one allowlisted control path, or `nil` when the
+    /// leased origin cannot produce a safe loopback URL for it.
+    func requestURL(path: String) -> URL? {
+        guard let origin = leasedOrigin(),
+              let url = URL(string: origin.absoluteString + path),
+              allows(url, path: path)
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private struct LeasedOrigin {
+        let absoluteString: String
+        let port: Int
+    }
+
+    private func leasedOrigin() -> LeasedOrigin? {
+        guard let components = URLComponents(
+                url: endpoint.baseURL,
+                resolvingAgainstBaseURL: false
+              ),
+              components.scheme == "http",
+              components.host == Self.loopbackHost,
+              let port = components.port,
+              components.path.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            return nil
+        }
+        return LeasedOrigin(
+            absoluteString: endpoint.baseURL.absoluteString,
+            port: port
+        )
     }
 }
 
@@ -41,8 +83,7 @@ final class OllamaRedirectDelegate:
     URLSessionDelegate,
     @unchecked Sendable
 {
-    private let policy = OllamaOriginPolicy()
-
+    /// The offline client never follows redirects, not even same-origin ones.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -50,11 +91,7 @@ final class OllamaRedirectDelegate:
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let url = request.url, policy.allowsRedirect(to: url) else {
-            completionHandler(nil)
-            return
-        }
-        completionHandler(request)
+        completionHandler(nil)
     }
 
     func urlSession(
@@ -82,7 +119,9 @@ final class OllamaRedirectDelegate:
 }
 
 enum OllamaSessionFactory {
-    static func make() -> URLSession {
+    /// Configuration for short buffered control requests. Streaming responses
+    /// carry their own configuration and must not inherit these deadlines.
+    static func makeControlSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
@@ -121,19 +160,31 @@ struct OllamaHTTPError: Error, Sendable {
 
 struct OllamaTransport: OllamaTransporting, Sendable {
     private let loader: any OllamaDataLoading
-    private let policy = OllamaOriginPolicy()
+    private let policy: OllamaOriginPolicy
 
-    init() {
-        loader = OllamaSessionFactory.make()
+    init(lease: OllamaServiceLease) {
+        loader = OllamaSessionFactory.makeControlSession()
+        policy = OllamaOriginPolicy(endpoint: lease.endpoint)
     }
 
-    private init(loader: any OllamaDataLoading) {
+    private init(
+        loader: any OllamaDataLoading,
+        endpoint: OllamaServiceEndpoint
+    ) {
         self.loader = loader
+        self.policy = OllamaOriginPolicy(endpoint: endpoint)
     }
 
     #if DEBUG
-    static func testInstance(loader: any OllamaDataLoading) -> Self {
-        Self(loader: loader)
+    static func testInstance(
+        loader: any OllamaDataLoading,
+        endpoint: OllamaServiceEndpoint
+    ) -> Self {
+        Self(loader: loader, endpoint: endpoint)
+    }
+
+    var endpointForTesting: OllamaServiceEndpoint {
+        policy.endpoint
     }
     #endif
 
@@ -142,12 +193,7 @@ struct OllamaTransport: OllamaTransporting, Sendable {
         method: String = "GET",
         body: Data? = nil
     ) async throws -> Data {
-        guard OllamaOriginPolicy.allowedPaths.contains(path),
-              let url = URL(
-                string: OllamaOriginPolicy.baseURL.absoluteString + path
-              ),
-              policy.allows(url)
-        else {
+        guard let url = policy.requestURL(path: path) else {
             throw LocalAIError.unsafeLocalEndpoint
         }
 
@@ -165,7 +211,8 @@ struct OllamaTransport: OllamaTransporting, Sendable {
         guard let http = response as? HTTPURLResponse else {
             throw LocalAIError.malformedResponse
         }
-        guard let finalURL = http.url, policy.allows(finalURL) else {
+        guard let finalURL = http.url,
+              policy.allows(finalURL, path: path) else {
             throw LocalAIError.unsafeLocalEndpoint
         }
         if (300..<400).contains(http.statusCode) {

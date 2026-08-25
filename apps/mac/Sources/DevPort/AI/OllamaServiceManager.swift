@@ -22,6 +22,17 @@ struct OllamaServiceLease: Sendable {
     func release() async {
         await releaseRegistration.release()
     }
+
+    #if DEBUG
+    static func testInstance(
+        endpoint: OllamaServiceEndpoint
+    ) -> OllamaServiceLease {
+        OllamaServiceLease(
+            endpoint: endpoint,
+            releaseRegistration: OllamaLeaseReleaseRegistration {}
+        )
+    }
+    #endif
 }
 
 private actor OllamaLeaseReleaseRegistration {

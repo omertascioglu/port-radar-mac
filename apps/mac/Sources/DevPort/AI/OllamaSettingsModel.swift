@@ -43,7 +43,7 @@ final class OllamaSettingsModel {
         }
     }
 
-    private let client: any OllamaClientProtocol
+    private let clientProvider: OllamaClientProviding
     private let preferences: Preferences
     @ObservationIgnored private let openApplication: OpenApplication
     @ObservationIgnored private let sleep: Sleep
@@ -57,29 +57,48 @@ final class OllamaSettingsModel {
         .milliseconds(500),
     ]
 
+    private static let liveOpenApplication: OpenApplication = {
+        try await OllamaApplication.open()
+    }
+
+    private static let liveSleep: Sleep = { duration in
+        try await Task.sleep(for: duration)
+    }
+
     init(
-        client: any OllamaClientProtocol = OllamaClient(),
+        clientProvider: @escaping OllamaClientProviding =
+            PrivateServiceOllamaClient.provider,
         preferences: Preferences = .shared,
-        openApplication: @escaping OpenApplication = {
-            try await OllamaApplication.open()
-        },
-        sleep: @escaping Sleep = { duration in
-            try await Task.sleep(for: duration)
-        }
+        openApplication: @escaping OpenApplication = liveOpenApplication,
+        sleep: @escaping Sleep = liveSleep
     ) {
-        self.client = client
+        self.clientProvider = clientProvider
         self.preferences = preferences
         self.openApplication = openApplication
         self.sleep = sleep
     }
 
+    convenience init(
+        client: any OllamaClientProtocol,
+        preferences: Preferences = .shared,
+        openApplication: @escaping OpenApplication = liveOpenApplication,
+        sleep: @escaping Sleep = liveSleep
+    ) {
+        self.init(
+            clientProvider: { client },
+            preferences: preferences,
+            openApplication: openApplication,
+            sleep: sleep
+        )
+    }
+
     func refresh(selectedModelID: String) {
         let generation = beginOperation()
-        let client = client
+        let clientProvider = clientProvider
 
         refreshTask = Task { [weak self] in
             do {
-                let models = try await client.localModels()
+                let models = try await clientProvider().localModels()
                 try Task.checkCancellation()
                 self?.publish(
                     models: models,
@@ -96,7 +115,7 @@ final class OllamaSettingsModel {
 
     func openOllamaAndRetry(selectedModelID: String) {
         let generation = beginOperation()
-        let client = client
+        let clientProvider = clientProvider
         let openApplication = openApplication
         let sleep = sleep
 
@@ -114,7 +133,7 @@ final class OllamaSettingsModel {
             var retryIndex = 0
             while true {
                 do {
-                    let models = try await client.localModels()
+                    let models = try await clientProvider().localModels()
                     try Task.checkCancellation()
                     self?.publish(
                         models: models,

@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork's private local Ollama service.
 import Foundation
 
 protocol OllamaClientProtocol: Sendable {
@@ -11,10 +12,30 @@ protocol OllamaClientProtocol: Sendable {
     func unload(model: String) async
 }
 
+/// Builds a client bound to one owned lease on the fork's private service.
+typealias OllamaClientFactory =
+    @Sendable (OllamaServiceLease) -> any OllamaClientProtocol
+
+/// Resolves a client bound to the private service, acquiring what it needs.
+typealias OllamaClientProviding =
+    @Sendable () async throws -> any OllamaClientProtocol
+
+enum PrivateServiceOllamaClient {
+    static let factory: OllamaClientFactory = { lease in
+        OllamaClient(transport: OllamaTransport(lease: lease))
+    }
+
+    /// Lease lifetime stays with the callers that own a conversation or a
+    /// settings refresh; this only guarantees the private-service binding.
+    static let provider: OllamaClientProviding = {
+        factory(try await OllamaServiceManager.shared.acquire())
+    }
+}
+
 struct OllamaClient: OllamaClientProtocol, Sendable {
     let transport: any OllamaTransporting
 
-    init(transport: any OllamaTransporting = OllamaTransport()) {
+    init(transport: any OllamaTransporting) {
         self.transport = transport
     }
 

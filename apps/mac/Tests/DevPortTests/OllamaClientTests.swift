@@ -44,7 +44,38 @@ private actor QueueTransport: OllamaTransporting {
     }
 }
 
+private enum ClientSourceError: Error {
+    case missingSource(String)
+}
+
 final class OllamaClientTests: XCTestCase {
+    func testPrivateServiceClientBindsItsTransportToTheLeasedEndpoint() throws {
+        let endpoint = OllamaServiceEndpoint(
+            baseURL: URL(string: "http://127.0.0.1:11435")!,
+            processIdentifier: 7788
+        )
+        let lease = OllamaServiceLease.testInstance(endpoint: endpoint)
+
+        let client = PrivateServiceOllamaClient.factory(lease)
+
+        let transport = try XCTUnwrap(
+            (client as? OllamaClient)?.transport as? OllamaTransport
+        )
+        XCTAssertEqual(transport.endpointForTesting, endpoint)
+    }
+
+    func testClientSourceExposesNoDefaultTransportForAGlobalService() throws {
+        let text = try clientSource()
+
+        XCTAssertFalse(text.contains("11434"))
+        XCTAssertFalse(text.contains("URLSession.shared"))
+        XCTAssertFalse(text.contains("OllamaTransport()"))
+        XCTAssertEqual(
+            releaseVisibleInitializers(in: text),
+            ["init(transport: any OllamaTransporting) {"]
+        )
+    }
+
     func testVersionUsesExactServiceDiscoveryRequest() async throws {
         let transport = QueueTransport([
             .success(Data("{\"version\":\"0.11.8\"}".utf8)),
@@ -324,6 +355,38 @@ final class OllamaClientTests: XCTestCase {
             XCTAssertFalse(String(describing: error).contains(secret))
             XCTAssertTrue(Mirror(reflecting: error).children.isEmpty)
         }
+    }
+
+    private func clientSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevPort/AI/OllamaClient.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw ClientSourceError.missingSource(url.path)
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func releaseVisibleInitializers(in text: String) -> [String] {
+        var isDebugOnly = false
+        return text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed == "#if DEBUG" {
+                    isDebugOnly = true
+                    return false
+                }
+                if isDebugOnly, trimmed == "#endif" {
+                    isDebugOnly = false
+                    return false
+                }
+                return !isDebugOnly
+            }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("init(") }
     }
 
     private func jsonObject(_ data: Data) throws -> [String: Any] {
