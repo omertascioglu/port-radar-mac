@@ -1,11 +1,13 @@
 // Modification notice: Added in 2026 for the Port Radar Offline fork.
 import AppKit
+import Darwin
 import Foundation
 import XCTest
 @testable import DevPort
 
 private enum ServiceTestError: Error, Sendable {
     case probeFailed
+    case socketSetupFailed
 }
 
 private actor ServiceOwnedProcessFake: OllamaOwnedProcess {
@@ -453,6 +455,57 @@ final class OllamaServiceManagerTests: XCTestCase {
         XCTAssertEqual(snapshot.stopCount, 0)
         let unrelatedIsRunning = await unrelated.isRunning
         XCTAssertTrue(unrelatedIsRunning)
+    }
+
+    func testRealProbeStillReportsListeningLoopbackPortOccupied() throws {
+        let listener = try makeLoopbackListener()
+        var listenerIsOpen = true
+        defer {
+            if listenerIsOpen { Darwin.close(listener.descriptor) }
+        }
+
+        XCTAssertFalse(
+            LoopbackPortProbeTestHook.isBindable(
+                host: "127.0.0.1",
+                port: Int(listener.port)
+            ),
+            "SO_REUSEADDR must not let the probe bind a listening port"
+        )
+
+        Darwin.close(listener.descriptor)
+        listenerIsOpen = false
+
+        XCTAssertTrue(
+            LoopbackPortProbeTestHook.isBindable(
+                host: "127.0.0.1",
+                port: Int(listener.port)
+            )
+        )
+    }
+
+    func testRealProbeToleratesTimeWaitOnLoopbackPort() throws {
+        let port = try makeClosedConnectionLeavingTimeWait()
+
+        var observedTimeWait = false
+        for _ in 0..<200 where !observedTimeWait {
+            if plainBindSucceeds(port: port) {
+                usleep(5_000)
+            } else {
+                observedTimeWait = true
+            }
+        }
+        try XCTSkipUnless(
+            observedTimeWait,
+            "No TIME_WAIT entry observed for the loopback port"
+        )
+
+        XCTAssertTrue(
+            LoopbackPortProbeTestHook.isBindable(
+                host: "127.0.0.1",
+                port: Int(port)
+            ),
+            "Probe must ignore TIME_WAIT so reopening chat can restart"
+        )
     }
 
     func testEarlyChildExitFailsClosedAndStopsOnlyOwnedChild() async {
@@ -927,6 +980,115 @@ final class OllamaServiceManagerTests: XCTestCase {
             )
             XCTAssertLessThan(description.count, 100, file: file, line: line)
         }
+    }
+
+    private func makeLoopbackAddress(port: UInt16) -> sockaddr_in {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        _ = "127.0.0.1".withCString {
+            Darwin.inet_pton(AF_INET, $0, &address.sin_addr)
+        }
+        return address
+    }
+
+    private func withSocketAddress<Result>(
+        _ address: inout sockaddr_in,
+        _ body: (UnsafePointer<sockaddr>) -> Result
+    ) -> Result {
+        withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(
+                to: sockaddr.self,
+                capacity: 1,
+                body
+            )
+        }
+    }
+
+    /// Binds an ephemeral loopback port and listens on it.
+    private func makeLoopbackListener() throws -> (
+        descriptor: Int32,
+        port: UInt16
+    ) {
+        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw ServiceTestError.socketSetupFailed
+        }
+        var address = makeLoopbackAddress(port: 0)
+        let bindResult = withSocketAddress(&address) { socketAddress in
+            Darwin.bind(
+                descriptor,
+                socketAddress,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            )
+        }
+        var bound = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &bound) { pointer in
+            pointer.withMemoryRebound(
+                to: sockaddr.self,
+                capacity: 1
+            ) { socketAddress in
+                Darwin.getsockname(descriptor, socketAddress, &length)
+            }
+        }
+        guard
+            bindResult == 0,
+            Darwin.listen(descriptor, 4) == 0,
+            nameResult == 0,
+            bound.sin_port != 0
+        else {
+            Darwin.close(descriptor)
+            throw ServiceTestError.socketSetupFailed
+        }
+        return (descriptor, UInt16(bigEndian: bound.sin_port))
+    }
+
+    /// Opens then server-side-closes one loopback connection so the
+    /// kernel keeps a TIME_WAIT entry for the returned local port.
+    private func makeClosedConnectionLeavingTimeWait() throws -> UInt16 {
+        let listener = try makeLoopbackListener()
+        let client = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard client >= 0 else {
+            Darwin.close(listener.descriptor)
+            throw ServiceTestError.socketSetupFailed
+        }
+        var target = makeLoopbackAddress(port: listener.port)
+        let connectResult = withSocketAddress(&target) { socketAddress in
+            Darwin.connect(
+                client,
+                socketAddress,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            )
+        }
+        let accepted = Darwin.accept(listener.descriptor, nil, nil)
+        guard connectResult == 0, accepted >= 0 else {
+            Darwin.close(client)
+            Darwin.close(listener.descriptor)
+            throw ServiceTestError.socketSetupFailed
+        }
+        // The accepted (server) side closes first, so the 4-tuple
+        // holding the listening port lands in TIME_WAIT.
+        Darwin.close(accepted)
+        Darwin.close(client)
+        Darwin.close(listener.descriptor)
+        return listener.port
+    }
+
+    /// A bind without SO_REUSEADDR: fails while TIME_WAIT lingers.
+    private func plainBindSucceeds(port: UInt16) -> Bool {
+        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { Darwin.close(descriptor) }
+        var address = makeLoopbackAddress(port: port)
+        return withSocketAddress(&address) { socketAddress in
+            Darwin.bind(
+                descriptor,
+                socketAddress,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            )
+        } == 0
     }
 
     private func waitForPendingAcquireCount(

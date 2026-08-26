@@ -95,10 +95,26 @@ private struct LoopbackPortAvailabilityChecker:
 {
     func isAvailable(host: String, port: Int) -> Bool {
         guard host == "127.0.0.1", port == 11435 else { return false }
+        return Self.isBindable(host: host, port: port)
+    }
 
+    static func isBindable(host: String, port: Int) -> Bool {
         let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
         defer { Darwin.close(descriptor) }
+
+        // SO_REUSEADDR keeps this check-and-close probe (never a
+        // listener) from reporting a port as taken while stale
+        // TIME_WAIT entries from the previous private service linger;
+        // a genuinely LISTENING occupant still fails bind().
+        var reuseAddress: Int32 = 1
+        _ = Darwin.setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &reuseAddress,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
 
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -125,6 +141,17 @@ private struct LoopbackPortAvailabilityChecker:
         return result == 0
     }
 }
+
+#if DEBUG
+enum LoopbackPortProbeTestHook {
+    static func isBindable(host: String, port: Int) -> Bool {
+        LoopbackPortAvailabilityChecker.isBindable(
+            host: host,
+            port: port
+        )
+    }
+}
+#endif
 
 private final class OllamaReadinessSessionDelegate:
     NSObject,
