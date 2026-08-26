@@ -1,14 +1,10 @@
-// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution.
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork's private local Ollama service.
 import SwiftUI
 
 struct SettingsModal: View {
     @Bindable private var preferences = Preferences.shared
     @State private var ollamaSettings = OllamaSettingsModel()
     let onDismiss: () -> Void
-
-    private let ollamaDownloadURL = URL(
-        string: "https://ollama.com/download/mac"
-    )!
 
     private var showsOllamaControls: Bool {
         preferences.askAboutProcessEnabled
@@ -122,15 +118,13 @@ struct SettingsModal: View {
 
                         Divider().padding(.leading, 12)
 
-                        Text(
-                            "Chat stays on this Mac. Cloud and remote Ollama models are excluded."
-                        )
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
+                        Text("Offline — data never leaves this Mac.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
                     }
                 }
 
@@ -203,13 +197,12 @@ struct SettingsModal: View {
             .padding(.horizontal, 16)
             .onAppear {
                 preferences.refreshLaunchAtLogin()
-                updateOllamaRefresh()
             }
             .onChange(of: preferences.askAboutProcessEnabled) {
-                updateOllamaRefresh()
+                cancelHiddenOllamaWork()
             }
             .onChange(of: preferences.localAIProviderPreference) {
-                updateOllamaRefresh()
+                cancelHiddenOllamaWork()
             }
             .onDisappear {
                 ollamaSettings.cancelRefresh()
@@ -240,6 +233,9 @@ struct SettingsModal: View {
         .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
     }
 
+    /// Readiness text plus the single control that checks for local models.
+    /// Nothing here links out: installing Ollama or a model happens outside
+    /// Port Radar Offline.
     private var ollamaStatus: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
@@ -255,38 +251,32 @@ struct SettingsModal: View {
 
                 Spacer(minLength: 4)
 
-                if ollamaSettings.state == .notRunning {
-                    Button("Open Ollama") {
-                        ollamaSettings.openOllamaAndRetry(
-                            selectedModelID: preferences.ollamaModelID
-                        )
-                    }
-                    .controlSize(.small)
+                Button(ollamaSettings.state.checkButtonTitle) {
+                    ollamaSettings.refresh(
+                        selectedModelID: preferences.ollamaModelID
+                    )
                 }
+                .controlSize(.small)
+                .disabled(ollamaSettings.state == .loading)
             }
 
-            if ollamaSettings.showsDownloadLink {
-                HStack(spacing: 5) {
-                    Text("Install Ollama to use a local model.")
-                    Link("Download Ollama", destination: ollamaDownloadURL)
-                }
-                .font(.caption2)
-                .fixedSize(horizontal: false, vertical: true)
+            if let guidance = ollamaSettings.state.installationGuidance {
+                Text(guidance)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
     }
 
-    private func updateOllamaRefresh() {
-        guard showsOllamaControls else {
-            ollamaSettings.cancelRefresh()
-            return
-        }
-
-        ollamaSettings.refresh(
-            selectedModelID: preferences.ollamaModelID
-        )
+    /// The private local service only ever starts because someone pressed the
+    /// check button, so hiding the Ollama controls or closing Settings just
+    /// cancels the operation in flight and releases its lease.
+    private func cancelHiddenOllamaWork() {
+        guard !showsOllamaControls else { return }
+        ollamaSettings.cancelRefresh()
     }
 
     private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {

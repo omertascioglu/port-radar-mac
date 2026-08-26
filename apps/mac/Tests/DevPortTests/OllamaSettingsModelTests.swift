@@ -60,6 +60,8 @@ private actor SettingsOllamaClientSpy: OllamaClientProtocol {
 
     func unload(model: String) async {}
 
+    func callCount() -> Int { localModelCalls }
+
     func waitForCallCount(_ expected: Int) async {
         while localModelCalls < expected {
             await Task.yield()
@@ -68,6 +70,110 @@ private actor SettingsOllamaClientSpy: OllamaClientProtocol {
 
     func resume(_ identifier: Int, returning models: [OllamaModel]) {
         continuations.removeValue(forKey: identifier)?.resume(returning: models)
+    }
+}
+
+/// Hands out test leases on the fork's private service and counts releases, so
+/// every refresh path can prove the service was borrowed and returned exactly
+/// once. Each lease carries a distinct process identifier so a test can tell
+/// which lease a client was bound to.
+private actor SettingsLeaseRecorder {
+    private var acquireCount = 0
+    private var releaseCount = 0
+
+    func makeLease() -> OllamaServiceLease {
+        acquireCount += 1
+        return OllamaServiceLease.testInstance(
+            endpoint: OllamaServiceEndpoint(
+                baseURL: URL(string: "http://127.0.0.1:11435")!,
+                processIdentifier: Int32(acquireCount)
+            ),
+            onRelease: { [self] in await recordRelease() }
+        )
+    }
+
+    func counts() -> (acquires: Int, releases: Int) {
+        (acquireCount, releaseCount)
+    }
+
+    func waitForReleases(_ expected: Int) async {
+        while releaseCount < expected {
+            await Task.yield()
+        }
+    }
+
+    private func recordRelease() {
+        releaseCount += 1
+    }
+}
+
+/// Suspends one acquisition until the test opens the gate, and ignores
+/// cancellation while suspended: the lease still arrives after the refresh was
+/// cancelled, which is the path that leaks a private service if the model
+/// forgets to release it.
+private actor SettingsAcquireGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waitCount = 0
+
+    func wait() async {
+        waitCount += 1
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilSuspended() async {
+        while waitCount == 0 {
+            await Task.yield()
+        }
+    }
+
+    func open() {
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+}
+
+/// Records the lease endpoint each client was built from, synchronously, so the
+/// assertion never races the refresh task.
+private final class SettingsLeasedEndpointLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var endpoints: [OllamaServiceEndpoint] = []
+
+    func append(_ endpoint: OllamaServiceEndpoint) {
+        lock.lock()
+        endpoints.append(endpoint)
+        lock.unlock()
+    }
+
+    func recorded() -> [OllamaServiceEndpoint] {
+        lock.lock()
+        defer { lock.unlock() }
+        return endpoints
+    }
+}
+
+/// Serves one `/api/tags` payload so a test can exercise the real client's
+/// local-model filtering through the settings model.
+private struct SettingsTagsTransport: OllamaTransporting {
+    let payload: String
+
+    func request(
+        path: String,
+        method: String,
+        body: Data?
+    ) async throws -> Data {
+        guard path == "/api/tags", method == "GET" else {
+            throw LocalAIError.malformedResponse
+        }
+        return Data(payload.utf8)
+    }
+
+    func stream(
+        path: String,
+        method: String,
+        body: Data?
+    ) async throws -> AsyncThrowingStream<Data, any Error> {
+        throw LocalAIError.malformedResponse
     }
 }
 
@@ -84,13 +190,19 @@ final class OllamaSettingsModelTests: XCTestCase {
         format: "gguf"
     )
 
-    func testRunningServicePresentsValidatedLocalModels() async {
+    func testRefreshBorrowsOneLeaseForALeaseBoundClientAndReleasesIt() async {
         let client = SettingsOllamaClientSpy([.models([qwen, llama])])
+        let recorder = SettingsLeaseRecorder()
+        let leased = SettingsLeasedEndpointLog()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
         let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences
+            acquireService: { await recorder.makeLease() },
+            preferences: preferences,
+            makeClient: { lease in
+                leased.append(lease.endpoint)
+                return client
+            }
         )
 
         XCTAssertEqual(model.state, .idle)
@@ -99,86 +211,218 @@ final class OllamaSettingsModelTests: XCTestCase {
 
         XCTAssertEqual(model.state, .loading)
         await waitUntil { model.state == .ready([self.qwen, self.llama]) }
-        XCTAssertEqual(model.state, .ready([qwen, llama]))
+        await recorder.waitForReleases(1)
+
+        let counts = await recorder.counts()
+        let calls = await client.callCount()
+        XCTAssertEqual(counts.acquires, 1)
+        XCTAssertEqual(counts.releases, 1)
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(
+            leased.recorded().map(\.processIdentifier),
+            [1]
+        )
     }
 
-    func testStoppedServiceIsNotRunning() async {
+    func testStoppedServiceIsNotRunningAndStillReleasesTheLease() async {
         let client = SettingsOllamaClientSpy([.notRunning])
+        let recorder = SettingsLeaseRecorder()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
-        let model = OllamaSettingsModel(
+        let model = makeModel(
             client: client,
+            recorder: recorder,
             preferences: preferences
         )
 
         model.refresh(selectedModelID: "")
 
         await waitUntil { model.state == .notRunning }
-        XCTAssertEqual(model.state, .notRunning)
+        await recorder.waitForReleases(1)
+
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 1)
+        XCTAssertEqual(counts.releases, 1)
     }
 
-    func testRunningServiceWithNoValidatedModelsIsReadyAndEmpty() async {
+    func testRunningServiceWithNoModelsGuidesInstallingOneElsewhere() async {
         let client = SettingsOllamaClientSpy([.models([])])
+        let recorder = SettingsLeaseRecorder()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
-        let model = OllamaSettingsModel(
+        let model = makeModel(
             client: client,
+            recorder: recorder,
             preferences: preferences
         )
 
         model.refresh(selectedModelID: "")
 
         await waitUntil { model.state == .ready([]) }
-        XCTAssertEqual(model.state, .ready([]))
+        await recorder.waitForReleases(1)
+
         XCTAssertNotEqual(model.state, .notRunning)
+        guard let guidance = model.state.installationGuidance else {
+            return XCTFail("Expected installation guidance for no models")
+        }
+        XCTAssertEqual(
+            guidance,
+            "Install a local model with Ollama outside Port Radar Offline, "
+                + "then check again."
+        )
+        XCTAssertFalse(guidance.lowercased().contains("http"))
+        XCTAssertFalse(guidance.contains("Download"))
+
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.releases, 1)
     }
 
-    func testDisappearedSelectionIsCleared() async {
-        let client = SettingsOllamaClientSpy([.models([llama])])
+    func testMissingOllamaReportsNotInstalledWithoutAnyDownloadState() async {
+        let client = SettingsOllamaClientSpy([.models([qwen])])
+        let recorder = SettingsLeaseRecorder()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
-        preferences.ollamaModelID = qwen.id
         let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences
+            acquireService: { throw LocalAIError.ollamaNotInstalled },
+            preferences: preferences,
+            makeClient: { _ in client }
         )
 
-        model.refresh(selectedModelID: qwen.id)
+        model.refresh(selectedModelID: "")
 
-        await waitUntil { model.state == .ready([self.llama]) }
-        XCTAssertEqual(preferences.ollamaModelID, "")
+        await waitUntil {
+            if case .failed = model.state { return true }
+            return false
+        }
+
+        guard case .failed(let message) = model.state else {
+            return XCTFail("Expected a bounded failure")
+        }
+        XCTAssertEqual(
+            message,
+            "Ollama is not installed. Install it separately, then try again."
+        )
+        XCTAssertTrue(message.hasPrefix("Ollama is not installed."))
+        XCTAssertFalse(message.lowercased().contains("http"))
+        XCTAssertFalse(message.contains("Download"))
+        XCTAssertNil(model.state.installationGuidance)
+
+        let calls = await client.callCount()
+        XCTAssertEqual(calls, 0)
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 0)
+        XCTAssertEqual(counts.releases, 0)
     }
 
-    func testSelectionChangedDuringRefreshIsNotCleared() async {
+    func testUnavailablePrivateServiceReportsBoundedFailureWithoutALease() async {
+        let client = SettingsOllamaClientSpy([])
+        let recorder = SettingsLeaseRecorder()
+        let (preferences, cleanup) = makePreferences()
+        defer { cleanup() }
+        let model = OllamaSettingsModel(
+            acquireService: {
+                throw LocalAIError.ollamaPrivateServiceUnavailable
+            },
+            preferences: preferences,
+            makeClient: { _ in client }
+        )
+
+        model.refresh(selectedModelID: "")
+
+        await waitUntil {
+            model.state
+                == .failed("Unable to start the private local Ollama service.")
+        }
+
+        let calls = await client.callCount()
+        XCTAssertEqual(calls, 0)
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 0)
+        XCTAssertEqual(counts.releases, 0)
+    }
+
+    func testLeaseArrivingAfterCancellationIsReleasedWithoutListingModels() async {
+        let client = SettingsOllamaClientSpy([.models([qwen])])
+        let recorder = SettingsLeaseRecorder()
+        let gate = SettingsAcquireGate()
+        let (preferences, cleanup) = makePreferences()
+        defer { cleanup() }
+        let model = OllamaSettingsModel(
+            acquireService: {
+                await gate.wait()
+                return await recorder.makeLease()
+            },
+            preferences: preferences,
+            makeClient: { _ in client }
+        )
+
+        model.refresh(selectedModelID: "")
+        await gate.waitUntilSuspended()
+        model.cancelRefresh()
+        model.cancelRefresh()
+        await gate.open()
+        await recorder.waitForReleases(1)
+        for _ in 0..<50 { await Task.yield() }
+
+        let counts = await recorder.counts()
+        let calls = await client.callCount()
+        XCTAssertEqual(counts.acquires, 1)
+        XCTAssertEqual(counts.releases, 1)
+        XCTAssertEqual(calls, 0)
+        XCTAssertNotEqual(model.state, .ready([qwen]))
+    }
+
+    func testDisappearanceDuringListingReleasesTheLeaseExactlyOnce() async {
         let client = SettingsOllamaClientSpy([.suspended(1)])
+        let recorder = SettingsLeaseRecorder()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
         preferences.ollamaModelID = qwen.id
-        let model = OllamaSettingsModel(
+        let model = makeModel(
             client: client,
+            recorder: recorder,
             preferences: preferences
         )
 
         model.refresh(selectedModelID: qwen.id)
         await client.waitForCallCount(1)
-        preferences.ollamaModelID = llama.id
-        await client.resume(1, returning: [])
 
-        await waitUntil { model.state == .ready([]) }
-        XCTAssertEqual(preferences.ollamaModelID, llama.id)
+        // The Ollama controls disappear, twice for good measure.
+        model.cancelRefresh()
+        model.cancelRefresh()
+        await client.resume(1, returning: [])
+        await recorder.waitForReleases(1)
+        for _ in 0..<50 { await Task.yield() }
+
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 1)
+        XCTAssertEqual(counts.releases, 1)
+        XCTAssertNotEqual(model.state, .ready([]))
+        XCTAssertEqual(preferences.ollamaModelID, qwen.id)
+
+        // A cancelled check leaves the control usable again instead of a
+        // permanently spinning row.
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertEqual(model.state.checkButtonTitle, "Check local models")
     }
 
-    func testStaleCancelledRefreshCannotOverwriteNewerStateOrSelection() async {
+    func testConcurrentRefreshCancelsTheOldOperationAndReleasesEveryLease() async {
         let client = SettingsOllamaClientSpy([
             .suspended(1),
             .models([llama]),
         ])
+        let recorder = SettingsLeaseRecorder()
+        let leased = SettingsLeasedEndpointLog()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
         preferences.ollamaModelID = qwen.id
         let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences
+            acquireService: { await recorder.makeLease() },
+            preferences: preferences,
+            makeClient: { lease in
+                leased.append(lease.endpoint)
+                return client
+            }
         )
 
         model.refresh(selectedModelID: qwen.id)
@@ -190,10 +434,59 @@ final class OllamaSettingsModelTests: XCTestCase {
         await waitUntil { model.state == .ready([self.llama]) }
 
         await client.resume(1, returning: [])
-        for _ in 0..<20 { await Task.yield() }
+        await recorder.waitForReleases(2)
+        for _ in 0..<50 { await Task.yield() }
 
         XCTAssertEqual(model.state, .ready([llama]))
         XCTAssertEqual(preferences.ollamaModelID, llama.id)
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 2)
+        XCTAssertEqual(counts.releases, 2)
+        XCTAssertEqual(
+            leased.recorded().map(\.processIdentifier),
+            [1, 2]
+        )
+    }
+
+    func testDisappearedSelectionIsCleared() async {
+        let client = SettingsOllamaClientSpy([.models([llama])])
+        let recorder = SettingsLeaseRecorder()
+        let (preferences, cleanup) = makePreferences()
+        defer { cleanup() }
+        preferences.ollamaModelID = qwen.id
+        let model = makeModel(
+            client: client,
+            recorder: recorder,
+            preferences: preferences
+        )
+
+        model.refresh(selectedModelID: qwen.id)
+
+        await waitUntil { model.state == .ready([self.llama]) }
+        XCTAssertEqual(preferences.ollamaModelID, "")
+        await recorder.waitForReleases(1)
+    }
+
+    func testSelectionChangedDuringRefreshIsNotCleared() async {
+        let client = SettingsOllamaClientSpy([.suspended(1)])
+        let recorder = SettingsLeaseRecorder()
+        let (preferences, cleanup) = makePreferences()
+        defer { cleanup() }
+        preferences.ollamaModelID = qwen.id
+        let model = makeModel(
+            client: client,
+            recorder: recorder,
+            preferences: preferences
+        )
+
+        model.refresh(selectedModelID: qwen.id)
+        await client.waitForCallCount(1)
+        preferences.ollamaModelID = llama.id
+        await client.resume(1, returning: [])
+
+        await waitUntil { model.state == .ready([]) }
+        XCTAssertEqual(preferences.ollamaModelID, llama.id)
+        await recorder.waitForReleases(1)
     }
 
     func testKnownErrorsUseBoundedMessagesAndUnknownErrorsAreGeneric() async {
@@ -202,10 +495,12 @@ final class OllamaSettingsModelTests: XCTestCase {
             .timedOut,
             .rawFailure(secret),
         ])
+        let recorder = SettingsLeaseRecorder()
         let (preferences, cleanup) = makePreferences()
         defer { cleanup() }
-        let model = OllamaSettingsModel(
+        let model = makeModel(
             client: client,
+            recorder: recorder,
             preferences: preferences
         )
 
@@ -216,8 +511,7 @@ final class OllamaSettingsModelTests: XCTestCase {
 
         model.refresh(selectedModelID: "")
         await waitUntil {
-            if case .failed = model.state { return true }
-            return false
+            model.state == .failed("Unable to check local Ollama models.")
         }
 
         guard case .failed(let message) = model.state else {
@@ -225,6 +519,67 @@ final class OllamaSettingsModelTests: XCTestCase {
         }
         XCTAssertEqual(message, "Unable to check local Ollama models.")
         XCTAssertFalse(message.contains(secret))
+
+        await recorder.waitForReleases(2)
+        let counts = await recorder.counts()
+        XCTAssertEqual(counts.acquires, 2)
+        XCTAssertEqual(counts.releases, 2)
+    }
+
+    func testCloudAndAmbiguousModelsNeverReachThePicker() async {
+        let payload = """
+        {
+          "models": [
+            {
+              "name": "qwen3:4b",
+              "model": "qwen3:4b",
+              "size": 2500000000,
+              "digest": "sha256:local",
+              "details": { "format": "gguf" }
+            },
+            {
+              "name": "gpt-oss:120b-cloud",
+              "model": "gpt-oss:120b-cloud",
+              "size": 1024,
+              "digest": "sha256:cloud",
+              "details": { "format": "gguf" }
+            },
+            {
+              "name": "hosted:8b",
+              "model": "hosted:8b",
+              "remote_host": "https://example.invalid",
+              "size": 1024,
+              "digest": "sha256:remote",
+              "details": { "format": "gguf" }
+            },
+            {
+              "name": "ambiguous:8b",
+              "model": "ambiguous:8b",
+              "size": 0,
+              "digest": "",
+              "details": { "format": "" }
+            }
+          ]
+        }
+        """
+        let recorder = SettingsLeaseRecorder()
+        let (preferences, cleanup) = makePreferences()
+        defer { cleanup() }
+        let model = OllamaSettingsModel(
+            acquireService: { await recorder.makeLease() },
+            preferences: preferences,
+            makeClient: { _ in
+                OllamaClient(
+                    transport: SettingsTagsTransport(payload: payload)
+                )
+            }
+        )
+
+        model.refresh(selectedModelID: "")
+
+        await waitUntil { model.state == .ready([self.qwen]) }
+        XCTAssertEqual(model.state, .ready([qwen]))
+        await recorder.waitForReleases(1)
     }
 
     func testStatusTextDistinguishesNoModelsFromStoppedService() {
@@ -246,42 +601,16 @@ final class OllamaSettingsModelTests: XCTestCase {
         )
     }
 
-    func testOpenOllamaUsesExpectedBundleAndActivatesApplication() async throws {
-        let expectedURL = URL(fileURLWithPath: "/Applications/Ollama.app")
-        var lookedUpBundleID: String?
-        var openedURL: URL?
-        var activates: Bool?
-
-        try await OllamaApplication.open(
-            locate: { bundleID in
-                lookedUpBundleID = bundleID
-                return expectedURL
-            },
-            launch: { url, shouldActivate in
-                openedURL = url
-                activates = shouldActivate
-            }
+    private func makeModel(
+        client: any OllamaClientProtocol,
+        recorder: SettingsLeaseRecorder,
+        preferences: Preferences
+    ) -> OllamaSettingsModel {
+        OllamaSettingsModel(
+            acquireService: { await recorder.makeLease() },
+            preferences: preferences,
+            makeClient: { _ in client }
         )
-
-        XCTAssertEqual(lookedUpBundleID, "com.electron.ollama")
-        XCTAssertEqual(openedURL, expectedURL)
-        XCTAssertEqual(activates, true)
-    }
-
-    func testOpenOllamaMissingApplicationDoesNotLaunchAnything() async {
-        var didLaunch = false
-
-        do {
-            try await OllamaApplication.open(
-                locate: { _ in nil },
-                launch: { _, _ in didLaunch = true }
-            )
-            XCTFail("Expected a missing Ollama application")
-        } catch {
-            XCTAssertEqual(error as? LocalAIError, .ollamaNotRunning)
-        }
-
-        XCTAssertFalse(didLaunch)
     }
 
     private func makePreferences() -> (Preferences, () -> Void) {

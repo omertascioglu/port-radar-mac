@@ -2,76 +2,6 @@ import Foundation
 import XCTest
 @testable import DevPort
 
-private actor StatusTextOllamaClientStub: OllamaClientProtocol {
-    enum Response: Sendable {
-        case models([OllamaModel])
-        case notRunning
-    }
-
-    private var responses: [Response]
-    private var localModelCallCount = 0
-
-    init(_ responses: [Response]) {
-        self.responses = responses
-    }
-
-    func version() async throws -> String { "test" }
-
-    func localModels() async throws -> [OllamaModel] {
-        localModelCallCount += 1
-        guard !responses.isEmpty else {
-            throw LocalAIError.malformedResponse
-        }
-
-        switch responses.removeFirst() {
-        case .models(let models):
-            return models
-        case .notRunning:
-            throw LocalAIError.ollamaNotRunning
-        }
-    }
-
-    func validateLocalModel(_ id: String) async throws {
-        throw LocalAIError.ollamaModelUnavailable
-    }
-
-    func chatStream(
-        model: String,
-        messages: [OllamaChatMessage]
-    ) async throws -> LocalAITextStream {
-        throw LocalAIError.malformedResponse
-    }
-
-    func unload(model: String) async {}
-
-    func callCount() -> Int { localModelCallCount }
-}
-
-private actor StatusTextRetrySleeper {
-    private var callCount = 0
-    private var continuations:
-        [CheckedContinuation<Void, any Error>] = []
-
-    func sleep(_ duration: Duration) async throws {
-        callCount += 1
-        try await withCheckedThrowingContinuation { continuation in
-            continuations.append(continuation)
-        }
-    }
-
-    func waitForCall() async {
-        while callCount == 0 {
-            await Task.yield()
-        }
-    }
-
-    func resumeAll() {
-        let pending = continuations
-        continuations.removeAll()
-        pending.forEach { $0.resume() }
-    }
-}
-
 @MainActor
 final class LocalAIStatusTextTests: XCTestCase {
     private let qwen = OllamaModel(
@@ -130,6 +60,71 @@ final class LocalAIStatusTextTests: XCTestCase {
         )
     }
 
+    func testMissingOllamaStatusTextNamesASeparateInstallation() throws {
+        let message = try XCTUnwrap(
+            LocalAIError.ollamaNotInstalled.errorDescription
+        )
+
+        XCTAssertEqual(
+            message,
+            "Ollama is not installed. Install it separately, then try again."
+        )
+        XCTAssertEqual(
+            OllamaSettingsModel.State.failed(message).statusText,
+            "Ollama is not installed. Install it separately, then try again."
+        )
+        XCTAssertTrue(message.hasPrefix("Ollama is not installed."))
+        XCTAssertFalse(message.lowercased().contains("http"))
+        XCTAssertFalse(message.contains("Download"))
+    }
+
+    func testNoLocalModelsOffersPlainNonClickableGuidance() throws {
+        let guidance = try XCTUnwrap(
+            OllamaSettingsModel.State.ready([]).installationGuidance
+        )
+
+        XCTAssertEqual(
+            guidance,
+            "Install a local model with Ollama outside Port Radar Offline, "
+                + "then check again."
+        )
+        XCTAssertFalse(guidance.lowercased().contains("http"))
+        XCTAssertFalse(guidance.contains("Download"))
+        XCTAssertFalse(guidance.lowercased().contains("click"))
+    }
+
+    func testEveryOtherStateOffersNoInstallationGuidance() {
+        let states: [OllamaSettingsModel.State] = [
+            .idle,
+            .loading,
+            .ready([qwen]),
+            .notRunning,
+            .failed("Unable to check local Ollama models."),
+        ]
+
+        for state in states {
+            XCTAssertNil(state.installationGuidance, "\(state)")
+        }
+    }
+
+    func testCheckTitleAsksForAFirstCheckThenOffersARefresh() {
+        XCTAssertEqual(
+            OllamaSettingsModel.State.idle.checkButtonTitle,
+            "Check local models"
+        )
+
+        let checkedStates: [OllamaSettingsModel.State] = [
+            .loading,
+            .ready([]),
+            .ready([qwen]),
+            .notRunning,
+            .failed("Unable to check local Ollama models."),
+        ]
+        for state in checkedStates {
+            XCTAssertEqual(state.checkButtonTitle, "Refresh", "\(state)")
+        }
+    }
+
     func testOllamaControlsAreVisibleForAutomaticAndOllamaOnly() {
         XCTAssertTrue(LocalAIProviderPreference.automatic.usesOllamaControls)
         XCTAssertFalse(LocalAIProviderPreference.apple.usesOllamaControls)
@@ -166,97 +161,108 @@ final class LocalAIStatusTextTests: XCTestCase {
         )
     }
 
-    func testOpenOllamaRetriesUntilValidatedModelsAreReady() async {
-        let client = StatusTextOllamaClientStub([
-            .notRunning,
-            .notRunning,
-            .models([qwen]),
-        ])
-        let (preferences, cleanup) = makePreferences()
-        defer { cleanup() }
-        var didOpenApplication = false
-        let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences,
-            openApplication: { didOpenApplication = true },
-            sleep: { _ in }
+    func testSettingsOffersOnlyOfflineLocalOllamaControls() throws {
+        let text = try settingsViewSource()
+
+        XCTAssertTrue(
+            text.contains("Text(\"Offline — data never leaves this Mac.\")")
         )
-
-        model.openOllamaAndRetry(selectedModelID: "")
-
-        await waitUntil { model.state == .ready([self.qwen]) }
-        let callCount = await client.callCount()
-        XCTAssertTrue(didOpenApplication)
-        XCTAssertEqual(callCount, 3)
-        XCTAssertFalse(model.showsDownloadLink)
+        XCTAssertTrue(
+            text.contains("Button(ollamaSettings.state.checkButtonTitle)")
+        )
+        XCTAssertTrue(text.contains("ollamaSettings.refresh("))
+        XCTAssertTrue(text.contains("ollamaSettings.cancelRefresh()"))
+        XCTAssertTrue(
+            text.contains("ollamaSettings.state.installationGuidance")
+        )
+        XCTAssertTrue(
+            text.contains("selection: $preferences.ollamaModelID")
+        )
+        XCTAssertTrue(
+            text.contains("selection: $preferences.localAIProviderPreference")
+        )
+        XCTAssertFalse(text.contains("Link("))
+        XCTAssertFalse(text.contains("URL("))
+        XCTAssertFalse(text.lowercased().contains("http"))
+        XCTAssertFalse(text.contains("Download"))
+        XCTAssertFalse(text.contains("Open Ollama"))
+        XCTAssertFalse(text.contains("openOllama"))
+        XCTAssertFalse(text.contains("showsDownloadLink"))
     }
 
-    func testOpenOllamaFailureOffersExplicitDownloadLink() async {
-        let client = StatusTextOllamaClientStub([])
-        let (preferences, cleanup) = makePreferences()
-        defer { cleanup() }
-        let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences,
-            openApplication: { throw LocalAIError.ollamaNotRunning },
-            sleep: { _ in }
+    func testShippingSourcesOfferNoOllamaDownloadOrLaunchPath() throws {
+        let sourceRoot = try sourceRootURL()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: sourceRoot
+                    .appendingPathComponent("Actions/OllamaApplication.swift")
+                    .path
+            )
         )
 
-        model.openOllamaAndRetry(selectedModelID: "")
-
-        await waitUntil {
-            model.state == .failed("Ollama app was not found.")
+        let forbidden = ["ollama.com/download", "openOllama", "showsDownloadLink"]
+        let violations = try swiftSources(at: sourceRoot).flatMap { url in
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let relativePath = url.path.replacingOccurrences(
+                of: sourceRoot.path + "/",
+                with: ""
+            )
+            return forbidden.compactMap { token in
+                text.contains(token) ? "\(relativePath): \(token)" : nil
+            }
         }
-        let callCount = await client.callCount()
-        XCTAssertTrue(model.showsDownloadLink)
-        XCTAssertEqual(callCount, 0)
+
+        XCTAssertEqual(violations, [])
     }
 
-    func testCancelPreventsRetryFromPublishingAfterDisappear() async {
-        let client = StatusTextOllamaClientStub([
-            .notRunning,
-            .models([qwen]),
-        ])
-        let sleeper = StatusTextRetrySleeper()
-        let (preferences, cleanup) = makePreferences()
-        defer { cleanup() }
-        let model = OllamaSettingsModel(
-            client: client,
-            preferences: preferences,
-            openApplication: {},
-            sleep: { duration in try await sleeper.sleep(duration) }
-        )
-
-        model.openOllamaAndRetry(selectedModelID: "")
-        await sleeper.waitForCall()
-        model.cancelRefresh()
-        await sleeper.resumeAll()
-        for _ in 0..<20 { await Task.yield() }
-
-        let callCount = await client.callCount()
-        XCTAssertEqual(callCount, 1)
-        XCTAssertNotEqual(model.state, .ready([qwen]))
+    private func settingsViewSource() throws -> String {
+        let url = try sourceRootURL()
+            .appendingPathComponent("Views/SettingsView.swift")
+        return try String(contentsOf: url, encoding: .utf8)
     }
 
-    private func makePreferences() -> (Preferences, () -> Void) {
-        let suiteName = "LocalAIStatusTextTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        return (
-            Preferences(defaults: defaults),
-            { defaults.removePersistentDomain(forName: suiteName) }
-        )
-    }
+    private func sourceRootURL() throws -> URL {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevPort", isDirectory: true)
 
-    private func waitUntil(
-        _ condition: @escaping @MainActor () -> Bool,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) async {
-        for _ in 0..<2_000 {
-            if condition() { return }
-            await Task.yield()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: sourceRoot.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw StatusTextSourceError.missingSourceRoot(sourceRoot.path)
         }
-        XCTFail("Condition was not met", file: file, line: line)
+
+        return sourceRoot
     }
+
+    private func swiftSources(at sourceRoot: URL) throws -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: sourceRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            throw StatusTextSourceError.cannotEnumerate(sourceRoot.path)
+        }
+
+        return try enumerator.compactMap { item in
+            guard let url = item as? URL,
+                  url.pathExtension == "swift",
+                  try url.resourceValues(forKeys: [.isRegularFileKey])
+                    .isRegularFile == true else {
+                return nil
+            }
+            return url
+        }
+        .sorted { $0.path < $1.path }
+    }
+}
+
+private enum StatusTextSourceError: Error {
+    case missingSourceRoot(String)
+    case cannotEnumerate(String)
 }

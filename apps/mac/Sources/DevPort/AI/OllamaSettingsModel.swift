@@ -14,8 +14,8 @@ extension LocalAIProviderPreference {
 @MainActor
 @Observable
 final class OllamaSettingsModel {
-    typealias OpenApplication = @MainActor @Sendable () async throws -> Void
-    typealias Sleep = @Sendable (Duration) async throws -> Void
+    /// Acquires one temporary lease on the fork's private local service.
+    typealias AcquireService = @Sendable () async throws -> OllamaServiceLease
 
     enum State: Equatable {
         case idle
@@ -41,143 +41,103 @@ final class OllamaSettingsModel {
                 message
             }
         }
+
+        /// Plain guidance shown under the status text. Port Radar Offline never
+        /// downloads Ollama or a model, so this copy stays non-clickable and
+        /// carries no address: installing a model happens outside the app.
+        var installationGuidance: String? {
+            guard case .ready(let models) = self, models.isEmpty else {
+                return nil
+            }
+            return "Install a local model with Ollama outside "
+                + "Port Radar Offline, then check again."
+        }
+
+        /// Title of the only control that starts a check. Nothing else in
+        /// Settings starts the private service.
+        var checkButtonTitle: String {
+            switch self {
+            case .idle: "Check local models"
+            case .loading, .ready, .notRunning, .failed: "Refresh"
+            }
+        }
     }
 
-    private let clientProvider: OllamaClientProviding
+    private let acquireService: AcquireService
     private let preferences: Preferences
-    @ObservationIgnored private let openApplication: OpenApplication
-    @ObservationIgnored private let sleep: Sleep
+    private let makeClient: OllamaClientFactory
     private(set) var state: State = .idle
-    private(set) var showsDownloadLink = false
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshGeneration = 0
 
-    private static let launchRetryDelays: [Duration] = [
-        .milliseconds(250),
-        .milliseconds(500),
-    ]
-
-    private static let liveOpenApplication: OpenApplication = {
-        try await OllamaApplication.open()
-    }
-
-    private static let liveSleep: Sleep = { duration in
-        try await Task.sleep(for: duration)
-    }
-
     init(
-        clientProvider: @escaping OllamaClientProviding =
-            PrivateServiceOllamaClient.provider,
+        acquireService: @escaping AcquireService = {
+            try await OllamaServiceManager.shared.acquire()
+        },
         preferences: Preferences = .shared,
-        openApplication: @escaping OpenApplication = liveOpenApplication,
-        sleep: @escaping Sleep = liveSleep
+        makeClient: @escaping OllamaClientFactory =
+            PrivateServiceOllamaClient.factory
     ) {
-        self.clientProvider = clientProvider
+        self.acquireService = acquireService
         self.preferences = preferences
-        self.openApplication = openApplication
-        self.sleep = sleep
+        self.makeClient = makeClient
     }
 
-    convenience init(
-        client: any OllamaClientProtocol,
-        preferences: Preferences = .shared,
-        openApplication: @escaping OpenApplication = liveOpenApplication,
-        sleep: @escaping Sleep = liveSleep
-    ) {
-        self.init(
-            clientProvider: { client },
-            preferences: preferences,
-            openApplication: openApplication,
-            sleep: sleep
-        )
-    }
-
+    /// Borrows the private local service for one listing and gives it straight
+    /// back: the child service outlives a settings check only if a
+    /// conversation holds its own lease.
     func refresh(selectedModelID: String) {
         let generation = beginOperation()
-        let clientProvider = clientProvider
+        let acquireService = acquireService
+        let makeClient = makeClient
 
         refreshTask = Task { [weak self] in
+            let lease: OllamaServiceLease
             do {
-                let models = try await clientProvider().localModels()
                 try Task.checkCancellation()
+                lease = try await acquireService()
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.publish(error: error, generation: generation)
+                return
+            }
+
+            // Every path below releases this lease exactly once, including the
+            // one where the lease only arrives after the refresh was cancelled.
+            do {
+                try Task.checkCancellation()
+                let models = try await makeClient(lease).localModels()
+                try Task.checkCancellation()
+                await lease.release()
                 self?.publish(
                     models: models,
                     selectedModelID: selectedModelID,
                     generation: generation
                 )
-            } catch is CancellationError {
-                return
             } catch {
+                await lease.release()
+                guard !(error is CancellationError) else { return }
                 self?.publish(error: error, generation: generation)
             }
         }
     }
 
-    func openOllamaAndRetry(selectedModelID: String) {
-        let generation = beginOperation()
-        let clientProvider = clientProvider
-        let openApplication = openApplication
-        let sleep = sleep
-
-        refreshTask = Task { [weak self] in
-            do {
-                try await openApplication()
-                try Task.checkCancellation()
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.publishOpenFailure(error, generation: generation)
-                return
-            }
-
-            var retryIndex = 0
-            while true {
-                do {
-                    let models = try await clientProvider().localModels()
-                    try Task.checkCancellation()
-                    self?.publish(
-                        models: models,
-                        selectedModelID: selectedModelID,
-                        generation: generation
-                    )
-                    return
-                } catch is CancellationError {
-                    return
-                } catch LocalAIError.ollamaNotRunning {
-                    guard retryIndex < Self.launchRetryDelays.count else {
-                        self?.publish(
-                            error: LocalAIError.ollamaNotRunning,
-                            generation: generation
-                        )
-                        return
-                    }
-
-                    let delay = Self.launchRetryDelays[retryIndex]
-                    retryIndex += 1
-                    do {
-                        try await sleep(delay)
-                        try Task.checkCancellation()
-                    } catch {
-                        return
-                    }
-                } catch {
-                    self?.publish(error: error, generation: generation)
-                    return
-                }
-            }
-        }
-    }
-
+    /// Cancels the operation in flight so its lease is released and nothing it
+    /// learned can still be published. An interrupted check leaves the control
+    /// ready for another one instead of a row that spins forever.
     func cancelRefresh() {
         refreshGeneration &+= 1
         refreshTask?.cancel()
         refreshTask = nil
+        if state == .loading {
+            state = .idle
+        }
     }
 
     private func beginOperation() -> Int {
         refreshTask?.cancel()
         refreshGeneration &+= 1
-        showsDownloadLink = false
         state = .loading
         return refreshGeneration
     }
@@ -205,20 +165,6 @@ final class OllamaSettingsModel {
             return
         }
         state = Self.failureState(for: error)
-        refreshTask = nil
-    }
-
-    private func publishOpenFailure(_ error: any Error, generation: Int) {
-        guard refreshGeneration == generation, !Task.isCancelled else {
-            return
-        }
-
-        if error as? LocalAIError == .ollamaNotRunning {
-            state = .failed("Ollama app was not found.")
-        } else {
-            state = .failed("Unable to open Ollama.")
-        }
-        showsDownloadLink = true
         refreshTask = nil
     }
 

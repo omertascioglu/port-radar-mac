@@ -19,23 +19,12 @@ protocol OllamaClientProtocol: Sendable {
 typealias OllamaClientFactory =
     @Sendable (OllamaServiceLease) -> any OllamaClientProtocol
 
-/// Resolves a client bound to the private service, acquiring what it needs.
-typealias OllamaClientProviding =
-    @Sendable () async throws -> any OllamaClientProtocol
-
 enum PrivateServiceOllamaClient {
+    /// Every client is built from a lease its caller owns, so there is no way
+    /// to reach the private service without also holding the responsibility to
+    /// release it.
     static let factory: OllamaClientFactory = { lease in
         OllamaClient(transport: OllamaTransport(lease: lease))
-    }
-
-    /// Interim, known leak: the lease acquired here is never released. Only
-    /// the client escapes this closure, so nothing can call `release()` on it
-    /// and the private service stays alive for the rest of the process.
-    /// Conversations no longer take this path — they acquire and release their
-    /// own lease — so the remaining leak is the settings-refresh call site,
-    /// which is owned by Task 10.
-    static let provider: OllamaClientProviding = {
-        factory(try await OllamaServiceManager.shared.acquire())
     }
 }
 
