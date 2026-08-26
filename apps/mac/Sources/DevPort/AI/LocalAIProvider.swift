@@ -58,7 +58,9 @@ enum LocalAIAvailability: Equatable, Sendable {
 
 protocol LocalAIConversation: Sendable {
     var providerID: LocalAIProviderID { get }
-    func respond(to prompt: String) async throws -> String
+    /// Streams one assistant turn. Chunks arrive in emission order; the turn's
+    /// text becomes conversation history only once the stream finishes.
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream
     func close() async
 }
 

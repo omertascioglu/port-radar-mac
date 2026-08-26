@@ -106,6 +106,28 @@ private actor CompletionCounter {
     func count() -> Int { value }
 }
 
+/// Collects a streamed reply chunk by chunk, so a test can assert both the
+/// joined text and how many chunks carried it.
+private func chunks(
+    of stream: LocalAITextStream
+) async throws -> [String] {
+    var received: [String] = []
+    for try await chunk in stream {
+        try Task.checkCancellation()
+        received.append(chunk)
+    }
+    try Task.checkCancellation()
+    return received
+}
+
+private func respond(
+    _ conversation: AppleFoundationModelConversation,
+    to prompt: String
+) async throws -> String {
+    try await chunks(of: conversation.streamResponse(to: prompt))
+        .joined()
+}
+
 final class AppleProviderFallbackTests: XCTestCase {
     func testAppleProviderAlwaysIdentifiesAsApple() {
         XCTAssertEqual(AppleFoundationModelProvider().id, .apple)
@@ -118,18 +140,33 @@ final class AppleProviderFallbackTests: XCTestCase {
         XCTAssertEqual(resolver.ollama.id, .ollama)
     }
 
+    func testAppleEmitsTheCompleteReplyAsExactlyOneChunk() async throws {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let response = Task {
+            try await chunks(of: conversation.streamResponse(to: "Question"))
+        }
+        await session.waitUntilResponseCount(1)
+
+        await session.completeNextResponse("One complete Apple reply")
+        let received = try await response.value
+
+        XCTAssertEqual(received, ["One complete Apple reply"])
+        await conversation.close()
+    }
+
     func testConcurrentResponsesAreSerializedInCallOrder() async throws {
         let session = ControlledAppleSession()
         let conversation = AppleFoundationModelConversation(session: session)
         let first = Task {
-            try await conversation.respond(to: "First question")
+            try await respond(conversation, to: "First question")
         }
         await session.waitUntilResponseCount(1)
 
         let secondStarted = expectation(description: "second caller started")
         let second = Task {
             secondStarted.fulfill()
-            return try await conversation.respond(to: "Second question")
+            return try await respond(conversation, to: "Second question")
         }
         await fulfillment(of: [secondStarted], timeout: 1)
         for _ in 0..<20 { await Task.yield() }
@@ -159,7 +196,7 @@ final class AppleProviderFallbackTests: XCTestCase {
         let session = ControlledAppleSession()
         let conversation = AppleFoundationModelConversation(session: session)
         let response = Task {
-            try await conversation.respond(to: "Question")
+            try await respond(conversation, to: "Question")
         }
         await session.waitUntilResponseCount(1)
 
@@ -206,14 +243,14 @@ final class AppleProviderFallbackTests: XCTestCase {
         let session = ControlledAppleSession()
         let conversation = AppleFoundationModelConversation(session: session)
         let active = Task {
-            try await conversation.respond(to: "Active")
+            try await respond(conversation, to: "Active")
         }
         await session.waitUntilResponseCount(1)
 
         let queuedStarted = expectation(description: "queued caller started")
         let queued = Task {
             queuedStarted.fulfill()
-            return try await conversation.respond(to: "Queued")
+            return try await respond(conversation, to: "Queued")
         }
         await fulfillment(of: [queuedStarted], timeout: 1)
         for _ in 0..<20 { await Task.yield() }
@@ -244,7 +281,7 @@ final class AppleProviderFallbackTests: XCTestCase {
         let session = ControlledAppleSession()
         let conversation = AppleFoundationModelConversation(session: session)
         let active = Task {
-            try await conversation.respond(to: "Active")
+            try await respond(conversation, to: "Active")
         }
         await session.waitUntilResponseCount(1)
 
@@ -255,7 +292,7 @@ final class AppleProviderFallbackTests: XCTestCase {
         let canceled = Task {
             queuedStarted.fulfill()
             defer { queuedFinished.fulfill() }
-            return try await conversation.respond(to: "Canceled")
+            return try await respond(conversation, to: "Canceled")
         }
         await fulfillment(of: [queuedStarted], timeout: 1)
         for _ in 0..<20 { await Task.yield() }
@@ -267,7 +304,7 @@ final class AppleProviderFallbackTests: XCTestCase {
         XCTAssertEqual(snapshot.activeResponses, 1)
 
         let survivor = Task {
-            try await conversation.respond(to: "Survivor")
+            try await respond(conversation, to: "Survivor")
         }
         await session.completeNextResponse("Active answer")
         let activeAnswer = try await active.value

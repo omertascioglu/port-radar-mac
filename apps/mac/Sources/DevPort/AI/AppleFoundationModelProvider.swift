@@ -178,7 +178,18 @@ actor AppleFoundationModelConversation: LocalAIConversation {
         self.session = session
     }
 
-    func respond(to prompt: String) async throws -> String {
+    /// Apple's session hands back one finished reply, so this wraps it as a
+    /// single stream chunk instead of reaching for unverified streaming API.
+    /// The lifecycle gate still serializes whole turns.
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
+        let response = try await completeResponse(to: prompt)
+        return LocalAITextStream { continuation in
+            continuation.yield(response)
+            continuation.finish()
+        }
+    }
+
+    private func completeResponse(to prompt: String) async throws -> String {
         try await responseTurnGate.acquire()
         defer { responseTurnGate.release() }
 

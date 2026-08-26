@@ -4,13 +4,28 @@ import XCTest
 private actor RegistryConversationSpy: LocalAIConversation {
     nonisolated let providerID: LocalAIProviderID = .ollama
 
+    private let chunks: [String]
+    private var prompts: [String] = []
     private var closeCount = 0
 
-    func respond(to prompt: String) async throws -> String { prompt }
+    init(chunks: [String] = []) {
+        self.chunks = chunks
+    }
+
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
+        prompts.append(prompt)
+        let emitted = chunks.isEmpty ? [prompt] : chunks
+        return LocalAITextStream { continuation in
+            emitted.forEach { continuation.yield($0) }
+            continuation.finish()
+        }
+    }
 
     func close() async {
         closeCount += 1
     }
+
+    func recordedPrompts() -> [String] { prompts }
 
     func recordedCloseCount() -> Int { closeCount }
 }
@@ -24,7 +39,12 @@ private actor BlockingRegistryConversationSpy: LocalAIConversation {
     private var canFinishClosing = false
     private var closeFinishWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func respond(to prompt: String) async throws -> String { prompt }
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
+        LocalAITextStream { continuation in
+            continuation.yield(prompt)
+            continuation.finish()
+        }
+    }
 
     func close() async {
         closeCount += 1
@@ -71,7 +91,9 @@ private final class RegistrationObservedConversation: @unchecked Sendable,
         return .ollama
     }
 
-    func respond(to prompt: String) async throws -> String { prompt }
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
+        try await conversation.streamResponse(to: prompt)
+    }
 
     func close() async { await conversation.close() }
 
@@ -167,6 +189,59 @@ private actor TerminationCleanupProbe {
 }
 
 final class LocalAIConversationRegistryTests: XCTestCase {
+    func testManagedConversationForwardsStreamedChunksInOrder() async throws {
+        let registry = LocalAIConversationRegistry()
+        let conversation = RegistryConversationSpy(
+            chunks: ["Hel", "lo", " there"]
+        )
+        let registered = await registry.register(
+            token: UUID(),
+            conversation: conversation
+        )
+        let managed = try XCTUnwrap(registered)
+
+        var received: [String] = []
+        for try await chunk in try await managed.streamResponse(to: "Question") {
+            received.append(chunk)
+        }
+
+        XCTAssertEqual(received, ["Hel", "lo", " there"])
+        XCTAssertEqual(managed.providerID, .ollama)
+        let prompts = await conversation.recordedPrompts()
+        XCTAssertEqual(prompts, ["Question"])
+
+        await registry.closeActive()
+
+        let closeCount = await conversation.recordedCloseCount()
+        XCTAssertEqual(closeCount, 1)
+    }
+
+    func testManagedConversationRejectsStreamingAfterClose() async throws {
+        let registry = LocalAIConversationRegistry()
+        let conversation = RegistryConversationSpy()
+        let registered = await registry.register(
+            token: UUID(),
+            conversation: conversation
+        )
+        let managed = try XCTUnwrap(registered)
+
+        await registry.closeActive()
+
+        do {
+            _ = try await managed.streamResponse(to: "After close")
+            XCTFail("Expected the closed wrapper to reject new streams")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        let prompts = await conversation.recordedPrompts()
+        let closeCount = await conversation.recordedCloseCount()
+        XCTAssertTrue(prompts.isEmpty)
+        XCTAssertEqual(closeCount, 1)
+    }
+
     func testRegisterThenCloseActiveClosesConversationExactlyOnce() async {
         let registry = LocalAIConversationRegistry()
         let conversation = RegistryConversationSpy()

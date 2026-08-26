@@ -84,9 +84,9 @@ private actor ManagedLocalAIConversation: LocalAIConversation {
         self.conversation = conversation
     }
 
-    func respond(to prompt: String) async throws -> String {
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
         guard !didClose else { throw CancellationError() }
-        return try await conversation.respond(to: prompt)
+        return try await conversation.streamResponse(to: prompt)
     }
 
     func close() async {

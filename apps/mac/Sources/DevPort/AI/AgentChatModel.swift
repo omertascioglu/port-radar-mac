@@ -210,7 +210,9 @@ final class AgentChatModel {
         attempt: Int
     ) async {
         do {
-            let response = try await conversation.respond(to: prompt)
+            let response = try await Self.aggregated(
+                conversation.streamResponse(to: prompt)
+            )
             try Task.checkCancellation()
             guard !isClosed, generationAttempt == attempt else { return }
             messages.append(.init(role: .assistant, text: response))
@@ -238,6 +240,23 @@ final class AgentChatModel {
         guard !isClosed, generationAttempt == attempt else { return }
         generationTask = nil
         isSending = false
+    }
+
+    /// This turn still commits one finished reply, so the streamed chunks are
+    /// joined here; incremental rendering is owned by the chat UI task. A
+    /// cancelled consumer is handed `nil` by the stream rather than an error,
+    /// so cancellation is checked explicitly and a partial reply can never be
+    /// committed as a success.
+    private static func aggregated(
+        _ stream: LocalAITextStream
+    ) async throws -> String {
+        var reply = ""
+        for try await chunk in stream {
+            try Task.checkCancellation()
+            reply += chunk
+        }
+        try Task.checkCancellation()
+        return reply
     }
 
     private static func isCancellation(_ error: any Error) -> Bool {

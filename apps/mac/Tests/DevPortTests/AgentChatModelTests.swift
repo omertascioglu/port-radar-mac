@@ -77,6 +77,15 @@ private actor NeverAvailableProvider: LocalAIProvider {
     }
 }
 
+/// One finished reply delivered as a single streamed chunk, so these fakes keep
+/// asserting on complete replies while the contract is a stream.
+private func oneChunkStream(_ text: String) -> LocalAITextStream {
+    LocalAITextStream { continuation in
+        continuation.yield(text)
+        continuation.finish()
+    }
+}
+
 private struct ConversationSnapshot: Sendable {
     let prompts: [String]
     let closeCount: Int
@@ -100,10 +109,10 @@ private actor ImmediateConversationSpy: LocalAIConversation {
         self.responseError = responseError
     }
 
-    func respond(to prompt: String) async throws -> String {
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
         prompts.append(prompt)
         if let responseError { throw responseError }
-        return response
+        return oneChunkStream(response)
     }
 
     func close() async {
@@ -127,14 +136,15 @@ private actor ControlledConversationSpy: LocalAIConversation {
         self.providerID = providerID
     }
 
-    func respond(to prompt: String) async throws -> String {
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
         prompts.append(prompt)
         let waiters = responseWaiters
         responseWaiters.removeAll()
         waiters.forEach { $0.resume() }
-        return try await withCheckedThrowingContinuation { continuation in
+        let reply = try await withCheckedThrowingContinuation { continuation in
             pendingResponse = continuation
         }
+        return oneChunkStream(reply)
     }
 
     func close() async {
@@ -169,13 +179,13 @@ private actor CancellationAwareConversationSpy: LocalAIConversation {
         self.providerID = providerID
     }
 
-    func respond(to prompt: String) async throws -> String {
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
         prompts.append(prompt)
         let waiters = responseWaiters
         responseWaiters.removeAll()
         waiters.forEach { $0.resume() }
         try await Task.sleep(for: .seconds(30))
-        return "Too late"
+        return oneChunkStream("Too late")
     }
 
     func close() async {
@@ -204,14 +214,15 @@ private actor CloseReleasedConversationSpy: LocalAIConversation {
     private var pendingResponse: CheckedContinuation<String, Never>?
     private var responseWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func respond(to prompt: String) async throws -> String {
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
         prompts.append(prompt)
         let waiters = responseWaiters
         responseWaiters.removeAll()
         waiters.forEach { $0.resume() }
-        return await withCheckedContinuation { continuation in
+        let reply = await withCheckedContinuation { continuation in
             pendingResponse = continuation
         }
+        return oneChunkStream(reply)
     }
 
     func close() async {
@@ -325,8 +336,9 @@ final class AgentChatModelTests: XCTestCase {
 
         var snapshot = await provider.snapshot()
         XCTAssertEqual(counter.count, 1)
-        XCTAssertEqual(snapshot.availabilityModelIDs.count, 1)
-        XCTAssertEqual(snapshot.availabilityModelIDs.first!, "qwen3:4b")
+        // Ollama is created directly: probing its availability first would
+        // start and stop the private service before the real acquire.
+        XCTAssertTrue(snapshot.availabilityModelIDs.isEmpty)
         XCTAssertEqual(snapshot.creationModelIDs.count, 1)
         XCTAssertEqual(snapshot.creationModelIDs.first!, "qwen3:4b")
         XCTAssertEqual(snapshot.contexts.count, 1)
@@ -355,8 +367,7 @@ final class AgentChatModelTests: XCTestCase {
         await model.bootstrap()
 
         let snapshot = await provider.snapshot()
-        XCTAssertEqual(snapshot.availabilityModelIDs.count, 1)
-        XCTAssertNil(snapshot.availabilityModelIDs[0])
+        XCTAssertTrue(snapshot.availabilityModelIDs.isEmpty)
         XCTAssertEqual(snapshot.creationModelIDs.count, 1)
         XCTAssertNil(snapshot.creationModelIDs[0])
     }

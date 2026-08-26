@@ -25,11 +25,14 @@ struct OllamaServiceLease: Sendable {
 
     #if DEBUG
     static func testInstance(
-        endpoint: OllamaServiceEndpoint
+        endpoint: OllamaServiceEndpoint,
+        onRelease: @escaping @Sendable () async -> Void = {}
     ) -> OllamaServiceLease {
         OllamaServiceLease(
             endpoint: endpoint,
-            releaseRegistration: OllamaLeaseReleaseRegistration {}
+            releaseRegistration: OllamaLeaseReleaseRegistration(
+                releaseAction: onRelease
+            )
         )
     }
     #endif

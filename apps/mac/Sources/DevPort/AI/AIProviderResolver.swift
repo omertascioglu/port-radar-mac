@@ -15,7 +15,7 @@ struct AIProviderResolver: Sendable {
             ) {
                 return try await make(apple, context: context, modelID: nil)
             }
-            return try await require(
+            return try await make(
                 ollama,
                 context: context,
                 modelID: ollamaModelID
@@ -23,7 +23,7 @@ struct AIProviderResolver: Sendable {
         case .apple:
             return try await require(apple, context: context, modelID: nil)
         case .ollama:
-            return try await require(
+            return try await make(
                 ollama,
                 context: context,
                 modelID: ollamaModelID
@@ -58,17 +58,27 @@ struct AIProviderResolver: Sendable {
         return availability
     }
 
+    /// Creates one conversation. Ollama owns a private service of its own, so
+    /// creation *is* its availability check: a separate probe would start and
+    /// stop the child service before the real acquire, and the conversation's
+    /// own error already says why it could not start.
     private func make(
         _ provider: any LocalAIProvider,
         context: SanitizedProcessContext,
         modelID: String?
     ) async throws -> ResolvedLocalAIConversation {
-        ResolvedLocalAIConversation(
-            conversation: try await provider.makeConversation(
-                context: context,
-                modelID: modelID
-            )
+        try Task.checkCancellation()
+        let conversation = try await provider.makeConversation(
+            context: context,
+            modelID: modelID
         )
+        guard !Task.isCancelled else {
+            // A created conversation may already own the private service, so a
+            // late cancellation closes it instead of dropping it.
+            await conversation.close()
+            throw CancellationError()
+        }
+        return ResolvedLocalAIConversation(conversation: conversation)
     }
 }
 

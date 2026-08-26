@@ -12,6 +12,11 @@ private enum SyntheticClientError: Error, Sendable {
     case failed
 }
 
+private let leasedEndpoint = OllamaServiceEndpoint(
+    baseURL: URL(string: "http://127.0.0.1:11435")!,
+    processIdentifier: 4242
+)
+
 /// One finished reply delivered as a single streamed chunk.
 private func finishedTextStream(_ text: String) -> LocalAITextStream {
     LocalAITextStream { continuation in
@@ -20,25 +25,193 @@ private func finishedTextStream(_ text: String) -> LocalAITextStream {
     }
 }
 
-private struct OllamaClientSpySnapshot: Equatable, Sendable {
+/// Aggregates a streamed reply the way every consumer must: a consumer that is
+/// cancelled mid-stream sees `CancellationError`, never a partial reply.
+private func aggregated(
+    _ stream: LocalAITextStream,
+    into collector: ChunkCollector? = nil
+) async throws -> String {
+    var reply = ""
+    for try await chunk in stream {
+        try Task.checkCancellation()
+        reply += chunk
+        if let collector {
+            await collector.append(chunk)
+        }
+    }
+    try Task.checkCancellation()
+    return reply
+}
+
+private func respond(
+    _ conversation: OllamaConversation,
+    to prompt: String
+) async throws -> String {
+    try await aggregated(conversation.streamResponse(to: prompt))
+}
+
+private actor ChunkCollector {
+    private var chunks: [String] = []
+    private var waiters:
+        [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    func append(_ chunk: String) {
+        chunks.append(chunk)
+        var remaining:
+            [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in waiters {
+            if chunks.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        waiters = remaining
+    }
+
+    func waitUntilCount(_ count: Int) async {
+        guard chunks.count < count else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((count, continuation))
+        }
+    }
+
+    func collected() -> [String] { chunks }
+}
+
+/// Orders the observable service-lifetime events of one conversation.
+private actor ServiceEventLog {
+    private var events: [String] = []
+
+    func record(_ event: String) {
+        events.append(event)
+    }
+
+    func recorded() -> [String] { events }
+}
+
+private struct LeaseSnapshot: Equatable, Sendable {
+    let acquires: Int
+    let releases: Int
+}
+
+private actor ServiceLeaseSpy {
+    private let log: ServiceEventLog?
+    private let acquireFailure: (any Error & Sendable)?
+    private var acquires = 0
+    private var releases = 0
+
+    init(
+        log: ServiceEventLog? = nil,
+        acquireFailure: (any Error & Sendable)? = nil
+    ) {
+        self.log = log
+        self.acquireFailure = acquireFailure
+    }
+
+    func acquire() async throws -> OllamaServiceLease {
+        acquires += 1
+        if let acquireFailure { throw acquireFailure }
+        return OllamaServiceLease.testInstance(endpoint: leasedEndpoint) {
+            await self.recordRelease()
+        }
+    }
+
+    func snapshot() -> LeaseSnapshot {
+        LeaseSnapshot(acquires: acquires, releases: releases)
+    }
+
+    private func recordRelease() async {
+        releases += 1
+        await log?.record("release")
+    }
+}
+
+private struct LeaseBinding: Equatable, Sendable {
+    let processIdentifier: Int32
+    let modelID: String
+}
+
+private actor LeaseBindingRecorder {
+    private var bindings: [LeaseBinding] = []
+
+    func record(_ binding: LeaseBinding) {
+        bindings.append(binding)
+    }
+
+    func recorded() -> [LeaseBinding] { bindings }
+}
+
+/// A client that can only answer for the lease it was built from, so a test can
+/// prove validation ran against the lease-bound client.
+private struct LeaseBoundClientStub: OllamaClientProtocol {
+    let endpoint: OllamaServiceEndpoint
+    let recorder: LeaseBindingRecorder
+    let validationError: (any Error & Sendable)?
+
+    init(
+        endpoint: OllamaServiceEndpoint,
+        recorder: LeaseBindingRecorder,
+        validationError: (any Error & Sendable)? = nil
+    ) {
+        self.endpoint = endpoint
+        self.recorder = recorder
+        self.validationError = validationError
+    }
+
+    func version() async throws -> String { "test" }
+    func localModels() async throws -> [OllamaModel] { [] }
+
+    func validateLocalModel(_ id: String) async throws {
+        await recorder.record(
+            LeaseBinding(
+                processIdentifier: endpoint.processIdentifier,
+                modelID: id
+            )
+        )
+        if let validationError { throw validationError }
+    }
+
+    func chatStream(
+        model: String,
+        messages: [OllamaChatMessage]
+    ) async throws -> LocalAITextStream {
+        finishedTextStream("Local answer")
+    }
+
+    func unload(model: String) async {}
+}
+
+private struct ControlledStreamSnapshot: Equatable, Sendable {
     let validationModelIDs: [String]
     let chatModelIDs: [String]
     let chatMessages: [[OllamaChatMessage]]
     let unloadModelIDs: [String]
+    let cancelledSources: Int
 }
 
-private actor OllamaClientSpy: OllamaClientProtocol {
-    private let validationResult: ClientValidationResult
+/// Hands each chat turn a stream the test drives record by record, so nothing
+/// depends on timing.
+private actor ControlledStreamClient: OllamaClientProtocol {
+    private let log: ServiceEventLog?
+    private var validationResults: [ClientValidationResult]
     private var validationModelIDs: [String] = []
     private var chatModelIDs: [String] = []
     private var chatMessages: [[OllamaChatMessage]] = []
     private var unloadModelIDs: [String] = []
-    private var pendingChats: [CheckedContinuation<String, any Error>] = []
+    private var cancelledSources = 0
+    private var continuations: [LocalAITextStream.Continuation] = []
     private var chatCountWaiters:
         [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var cancellationWaiters:
+        [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
-    init(validationResult: ClientValidationResult = .success) {
-        self.validationResult = validationResult
+    init(
+        validationResults: [ClientValidationResult] = [],
+        log: ServiceEventLog? = nil
+    ) {
+        self.validationResults = validationResults
+        self.log = log
     }
 
     func version() async throws -> String { "test" }
@@ -46,7 +219,8 @@ private actor OllamaClientSpy: OllamaClientProtocol {
 
     func validateLocalModel(_ id: String) async throws {
         validationModelIDs.append(id)
-        switch validationResult {
+        guard !validationResults.isEmpty else { return }
+        switch validationResults.removeFirst() {
         case .success:
             return
         case .localError(let error):
@@ -62,15 +236,41 @@ private actor OllamaClientSpy: OllamaClientProtocol {
     ) async throws -> LocalAITextStream {
         chatModelIDs.append(model)
         chatMessages.append(messages)
-        resumeChatCountWaiters()
-        let reply = try await withCheckedThrowingContinuation { continuation in
-            pendingChats.append(continuation)
+        let (stream, continuation) = LocalAITextStream.makeStream()
+        continuation.onTermination = { reason in
+            guard case .cancelled = reason else { return }
+            Task { await self.recordCancelledSource() }
         }
-        return finishedTextStream(reply)
+        continuations.append(continuation)
+        resumeChatCountWaiters()
+        return stream
     }
 
     func unload(model: String) async {
         unloadModelIDs.append(model)
+        await log?.record("unload")
+    }
+
+    func emit(_ chunk: String) {
+        continuations.last?.yield(chunk)
+    }
+
+    func completeNextChat(with result: Result<String, SyntheticClientError>) {
+        switch result {
+        case .success(let reply):
+            continuations.last?.yield(reply)
+            continuations.last?.finish()
+        case .failure(let error):
+            continuations.last?.finish(throwing: error)
+        }
+    }
+
+    func finishStream() {
+        continuations.last?.finish()
+    }
+
+    func failStream() {
+        continuations.last?.finish(throwing: SyntheticClientError.failed)
     }
 
     func waitUntilChatCount(_ count: Int) async {
@@ -80,18 +280,35 @@ private actor OllamaClientSpy: OllamaClientProtocol {
         }
     }
 
-    func completeNextChat(with result: Result<String, SyntheticClientError>) {
-        guard !pendingChats.isEmpty else { return }
-        pendingChats.removeFirst().resume(with: result)
+    func waitUntilCancelledSourceCount(_ count: Int) async {
+        guard cancelledSources < count else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append((count, continuation))
+        }
     }
 
-    func snapshot() -> OllamaClientSpySnapshot {
-        .init(
+    func snapshot() -> ControlledStreamSnapshot {
+        ControlledStreamSnapshot(
             validationModelIDs: validationModelIDs,
             chatModelIDs: chatModelIDs,
             chatMessages: chatMessages,
-            unloadModelIDs: unloadModelIDs
+            unloadModelIDs: unloadModelIDs,
+            cancelledSources: cancelledSources
         )
+    }
+
+    private func recordCancelledSource() {
+        cancelledSources += 1
+        var remaining:
+            [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in cancellationWaiters {
+            if cancelledSources >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        cancellationWaiters = remaining
     }
 
     private func resumeChatCountWaiters() {
@@ -108,56 +325,6 @@ private actor OllamaClientSpy: OllamaClientProtocol {
     }
 }
 
-private struct ModelChangeClientSnapshot: Equatable, Sendable {
-    let validationModelIDs: [String]
-    let chatMessages: [[OllamaChatMessage]]
-}
-
-private actor ModelChangeClient: OllamaClientProtocol {
-    private var validationResults: [ClientValidationResult]
-    private var validationModelIDs: [String] = []
-    private var chatMessages: [[OllamaChatMessage]] = []
-
-    init(validationResults: [ClientValidationResult]) {
-        self.validationResults = validationResults
-    }
-
-    func version() async throws -> String { "test" }
-    func localModels() async throws -> [OllamaModel] { [] }
-
-    func validateLocalModel(_ id: String) async throws {
-        validationModelIDs.append(id)
-        guard !validationResults.isEmpty else {
-            throw SyntheticClientError.failed
-        }
-        switch validationResults.removeFirst() {
-        case .success:
-            return
-        case .localError(let error):
-            throw error
-        case .unknownError:
-            throw SyntheticClientError.failed
-        }
-    }
-
-    func chatStream(
-        model: String,
-        messages: [OllamaChatMessage]
-    ) async throws -> LocalAITextStream {
-        chatMessages.append(messages)
-        return finishedTextStream("Local answer")
-    }
-
-    func unload(model: String) async {}
-
-    func snapshot() -> ModelChangeClientSnapshot {
-        .init(
-            validationModelIDs: validationModelIDs,
-            chatMessages: chatMessages
-        )
-    }
-}
-
 private struct LifecycleClientSnapshot: Equatable, Sendable {
     let validationCalls: Int
     let chatCalls: Int
@@ -167,12 +334,17 @@ private struct LifecycleClientSnapshot: Equatable, Sendable {
 }
 
 private actor ControlledChatLifecycleClient: OllamaClientProtocol {
+    private let log: ServiceEventLog?
     private var chatCalls = 0
     private var chatCancellationCount = 0
     private var unloadModelIDs: [String] = []
     private var chatContinuation: CheckedContinuation<String, any Error>?
     private var chatStartWaiters: [CheckedContinuation<Void, Never>] = []
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(log: ServiceEventLog? = nil) {
+        self.log = log
+    }
 
     func version() async throws -> String { "test" }
     func localModels() async throws -> [OllamaModel] { [] }
@@ -199,6 +371,7 @@ private actor ControlledChatLifecycleClient: OllamaClientProtocol {
 
     func unload(model: String) async {
         unloadModelIDs.append(model)
+        await log?.record("unload")
         signalLifecycleEvent()
     }
 
@@ -244,6 +417,7 @@ private actor ControlledChatLifecycleClient: OllamaClientProtocol {
 }
 
 private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
+    private let log: ServiceEventLog?
     private var validationCalls = 0
     private var chatCalls = 0
     private var validationCancellationCount = 0
@@ -251,6 +425,10 @@ private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
     private var validationContinuation: CheckedContinuation<Void, any Error>?
     private var requestStartWaiters: [CheckedContinuation<Void, Never>] = []
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(log: ServiceEventLog? = nil) {
+        self.log = log
+    }
 
     func version() async throws -> String { "test" }
     func localModels() async throws -> [OllamaModel] { [] }
@@ -278,6 +456,7 @@ private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
 
     func unload(model: String) async {
         unloadModelIDs.append(model)
+        await log?.record("unload")
         signalLifecycleEvent()
     }
 
@@ -335,60 +514,83 @@ private actor ControlledValidationLifecycleClient: OllamaClientProtocol {
 final class OllamaConversationTests: XCTestCase {
     private let modelID = "qwen3:4b"
 
-    func testProviderAvailabilityRequiresNonemptySelectedModel() async {
-        let client = OllamaClientSpy()
-        let provider = OllamaProvider(client: client)
+    // MARK: - Service ownership
+
+    func testAvailabilityRequiresNonemptyModelBeforeTouchingTheService() async {
+        let leases = ServiceLeaseSpy()
+        let provider = makeProvider(leases: leases, client: ControlledStreamClient())
 
         let missing = await provider.availability(modelID: nil)
         let empty = await provider.availability(modelID: "")
 
         XCTAssertEqual(missing, .unavailable(.ollamaModelRequired))
         XCTAssertEqual(empty, .unavailable(.ollamaModelRequired))
-        let snapshot = await client.snapshot()
-        XCTAssertTrue(snapshot.validationModelIDs.isEmpty)
+        let snapshot = await leases.snapshot()
+        XCTAssertEqual(snapshot, LeaseSnapshot(acquires: 0, releases: 0))
     }
 
-    func testProviderAvailabilityValidatesAndPreservesLocalError() async {
-        let client = OllamaClientSpy(
-            validationResult: .localError(.remoteModelRejected)
+    func testAvailabilityReleasesTheLeaseItAcquiredToValidate() async {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient()
+        let provider = makeProvider(leases: leases, client: client)
+
+        let availability = await provider.availability(modelID: modelID)
+
+        XCTAssertEqual(availability, .available)
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
+        let clientSnapshot = await client.snapshot()
+        XCTAssertEqual(clientSnapshot.validationModelIDs, [modelID])
+    }
+
+    func testAvailabilityPreservesLocalErrorAndStillReleasesTheLease() async {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient(
+            validationResults: [.localError(.remoteModelRejected)]
         )
-        let provider = OllamaProvider(client: client)
+        let provider = makeProvider(leases: leases, client: client)
 
         let availability = await provider.availability(modelID: modelID)
 
         XCTAssertEqual(availability, .unavailable(.remoteModelRejected))
-        let snapshot = await client.snapshot()
-        XCTAssertEqual(snapshot.validationModelIDs, [modelID])
+        let snapshot = await leases.snapshot()
+        XCTAssertEqual(snapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
-    func testProviderAvailabilityMapsUnknownFailureToBoundedError() async {
-        let client = OllamaClientSpy(validationResult: .unknownError)
-        let provider = OllamaProvider(client: client)
+    func testAvailabilityMapsUnknownFailureToBoundedErrorAndReleases() async {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient(validationResults: [.unknownError])
+        let provider = makeProvider(leases: leases, client: client)
 
         let availability = await provider.availability(modelID: modelID)
 
         XCTAssertEqual(availability, .unavailable(.ollamaNotRunning))
         XCTAssertFalse(String(describing: availability).contains("failed"))
+        let snapshot = await leases.snapshot()
+        XCTAssertEqual(snapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
-    func testProviderRevalidatesChosenModelWhenCreatingConversation() async throws {
-        let client = OllamaClientSpy()
-        let provider = OllamaProvider(client: client)
-
-        let conversation = try await provider.makeConversation(
-            context: .init(text: "port: 3000"),
-            modelID: modelID
+    func testAvailabilitySurfacesServiceStartFailureWithoutValidating() async {
+        let leases = ServiceLeaseSpy(
+            acquireFailure: LocalAIError.ollamaPrivateServiceUnavailable
         )
+        let client = ControlledStreamClient()
+        let provider = makeProvider(leases: leases, client: client)
 
-        XCTAssertEqual(conversation.providerID, .ollama)
-        let snapshot = await client.snapshot()
-        XCTAssertEqual(snapshot.validationModelIDs, [modelID])
-        XCTAssertTrue(snapshot.chatMessages.isEmpty)
+        let availability = await provider.availability(modelID: modelID)
+
+        XCTAssertEqual(
+            availability,
+            .unavailable(.ollamaPrivateServiceUnavailable)
+        )
+        let clientSnapshot = await client.snapshot()
+        XCTAssertTrue(clientSnapshot.validationModelIDs.isEmpty)
     }
 
-    func testProviderCreationRequiresNonemptySelectedModel() async {
-        let client = OllamaClientSpy()
-        let provider = OllamaProvider(client: client)
+    func testCreationRequiresNonemptyModelBeforeAcquiringTheService() async {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient()
+        let provider = makeProvider(leases: leases, client: client)
 
         for modelID: String? in [nil, ""] {
             do {
@@ -402,21 +604,133 @@ final class OllamaConversationTests: XCTestCase {
             }
         }
 
-        let snapshot = await client.snapshot()
-        XCTAssertTrue(snapshot.validationModelIDs.isEmpty)
+        let leaseSnapshot = await leases.snapshot()
+        let clientSnapshot = await client.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 0, releases: 0))
+        XCTAssertTrue(clientSnapshot.validationModelIDs.isEmpty)
     }
 
+    func testCreationValidatesAgainstTheLeaseBoundClientAndKeepsTheLease() async throws {
+        let leases = ServiceLeaseSpy()
+        let bindings = LeaseBindingRecorder()
+        let provider = OllamaProvider(
+            acquireLease: { try await leases.acquire() },
+            makeClient: { lease in
+                LeaseBoundClientStub(
+                    endpoint: lease.endpoint,
+                    recorder: bindings
+                )
+            }
+        )
+
+        let conversation = try await provider.makeConversation(
+            context: .init(text: "port: 3000"),
+            modelID: modelID
+        )
+
+        XCTAssertEqual(conversation.providerID, .ollama)
+        var recorded = await bindings.recorded()
+        XCTAssertEqual(
+            recorded,
+            [
+                LeaseBinding(
+                    processIdentifier: leasedEndpoint.processIdentifier,
+                    modelID: modelID
+                ),
+            ]
+        )
+        var leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 0))
+
+        let reply = try await aggregated(
+            conversation.streamResponse(to: "Explain it")
+        )
+        XCTAssertEqual(reply, "Local answer")
+        recorded = await bindings.recorded()
+        XCTAssertEqual(recorded.count, 2)
+        XCTAssertEqual(
+            recorded[1].processIdentifier,
+            leasedEndpoint.processIdentifier
+        )
+
+        await conversation.close()
+        leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
+    }
+
+    func testCreationValidationFailureReleasesTheLeaseExactlyOnce() async {
+        let leases = ServiceLeaseSpy()
+        let bindings = LeaseBindingRecorder()
+        let provider = OllamaProvider(
+            acquireLease: { try await leases.acquire() },
+            makeClient: { lease in
+                LeaseBoundClientStub(
+                    endpoint: lease.endpoint,
+                    recorder: bindings,
+                    validationError: LocalAIError.remoteModelRejected
+                )
+            }
+        )
+
+        do {
+            _ = try await provider.makeConversation(
+                context: .init(text: "port: 3000"),
+                modelID: modelID
+            )
+            XCTFail("Expected the rejected model to fail creation")
+        } catch {
+            XCTAssertEqual(error as? LocalAIError, .remoteModelRejected)
+        }
+
+        let snapshot = await leases.snapshot()
+        XCTAssertEqual(snapshot, LeaseSnapshot(acquires: 1, releases: 1))
+    }
+
+    func testCreationSurfacesServiceStartFailureWithoutBuildingAClient() async {
+        let leases = ServiceLeaseSpy(
+            acquireFailure: LocalAIError.ollamaPrivateServiceUnavailable
+        )
+        let bindings = LeaseBindingRecorder()
+        let provider = OllamaProvider(
+            acquireLease: { try await leases.acquire() },
+            makeClient: { lease in
+                LeaseBoundClientStub(
+                    endpoint: lease.endpoint,
+                    recorder: bindings
+                )
+            }
+        )
+
+        do {
+            _ = try await provider.makeConversation(
+                context: .init(text: "port: 3000"),
+                modelID: modelID
+            )
+            XCTFail("Expected the private service failure to surface")
+        } catch {
+            XCTAssertEqual(
+                error as? LocalAIError,
+                .ollamaPrivateServiceUnavailable
+            )
+        }
+
+        let recorded = await bindings.recorded()
+        let snapshot = await leases.snapshot()
+        XCTAssertTrue(recorded.isEmpty)
+        XCTAssertEqual(snapshot, LeaseSnapshot(acquires: 1, releases: 0))
+    }
+
+    // MARK: - Streaming
+
     func testConversationStartsWithExactProviderNeutralSystemPrompt() async throws {
-        let client = OllamaClientSpy()
-        let context = SanitizedProcessContext(
-            text: "port: 3000\ncommand: tool --token=[REDACTED]"
-        )
-        let conversation = OllamaConversation(
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(
             client: client,
-            modelID: modelID,
-            context: context
+            context: .init(
+                text: "port: 3000\ncommand: tool --token=[REDACTED]"
+            )
         )
-        let response = Task { try await conversation.respond(to: "Explain it") }
+        let response = Task { try await respond(conversation, to: "Explain it") }
 
         await client.waitUntilChatCount(1)
 
@@ -446,19 +760,48 @@ final class OllamaConversationTests: XCTestCase {
 
         await client.completeNextChat(with: .success("Local answer"))
         _ = try await response.value
+        await conversation.close()
+    }
+
+    func testChunksReachTheConsumerBeforeTheReplyIsCommitted() async throws {
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(client: client)
+        let collector = ChunkCollector()
+
+        let stream = try await conversation.streamResponse(to: "Explain it")
+        let consumer = Task { try await aggregated(stream, into: collector) }
+        await client.emit("Hel")
+        await collector.waitUntilCount(1)
+
+        let firstChunks = await collector.collected()
+        XCTAssertEqual(firstChunks, ["Hel"])
+        let midStream = await conversation.committedMessagesForTesting()
+        XCTAssertEqual(midStream.map(\.role), ["system"])
+
+        await client.emit("lo")
+        await client.finishStream()
+        let reply = try await consumer.value
+
+        XCTAssertEqual(reply, "Hello")
+        let allChunks = await collector.collected()
+        XCTAssertEqual(allChunks, ["Hel", "lo"])
+        let committed = await conversation.committedMessagesForTesting()
+        XCTAssertEqual(committed.map(\.role), ["system", "user", "assistant"])
+        XCTAssertEqual(committed.last?.content, "Hello")
+        await conversation.close()
     }
 
     func testSuccessfulResponseCommitsUserAndAssistantMessages() async throws {
-        let client = OllamaClientSpy()
-        let conversation = makeConversation(client: client)
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(client: client)
 
-        let first = Task { try await conversation.respond(to: "First question") }
+        let first = Task { try await respond(conversation, to: "First question") }
         await client.waitUntilChatCount(1)
         await client.completeNextChat(with: .success("First answer"))
         let firstAnswer = try await first.value
         XCTAssertEqual(firstAnswer, "First answer")
 
-        let second = Task { try await conversation.respond(to: "Second question") }
+        let second = Task { try await respond(conversation, to: "Second question") }
         await client.waitUntilChatCount(2)
         let snapshot = await client.snapshot()
         XCTAssertEqual(
@@ -471,15 +814,21 @@ final class OllamaConversationTests: XCTestCase {
         )
         await client.completeNextChat(with: .success("Second answer"))
         _ = try await second.value
+        await conversation.close()
     }
 
-    func testFailedResponseCommitsNeitherCandidateUserNorAssistant() async throws {
-        let client = OllamaClientSpy()
-        let conversation = makeConversation(client: client)
+    func testFailedPartialResponseIsNotCommittedToFutureHistory() async throws {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(
+            client: client,
+            leases: leases
+        )
 
-        let failed = Task { try await conversation.respond(to: "Failed question") }
-        await client.waitUntilChatCount(1)
-        await client.completeNextChat(with: .failure(.failed))
+        let stream = try await conversation.streamResponse(to: "Failed question")
+        let failed = Task { try await aggregated(stream) }
+        await client.emit("Partial answer")
+        await client.failStream()
         do {
             _ = try await failed.value
             XCTFail("Expected the first response to fail")
@@ -487,46 +836,105 @@ final class OllamaConversationTests: XCTestCase {
             // Expected.
         }
 
-        let retry = Task { try await conversation.respond(to: "Retry question") }
+        let afterFailure = await conversation.committedMessagesForTesting()
+        XCTAssertEqual(afterFailure.map(\.role), ["system"])
+
+        let retry = Task { try await respond(conversation, to: "Retry question") }
         await client.waitUntilChatCount(2)
         let snapshot = await client.snapshot()
-        XCTAssertEqual(
-            snapshot.chatMessages[1].map(\.role),
-            ["system", "user"]
-        )
+        XCTAssertEqual(snapshot.chatMessages[1].map(\.role), ["system", "user"])
         XCTAssertEqual(snapshot.chatMessages[1].last?.content, "Retry question")
         XCTAssertFalse(
             snapshot.chatMessages[1].contains(where: {
                 $0.content.contains("Failed question")
+                    || $0.content.contains("Partial answer")
             })
         )
         await client.completeNextChat(with: .success("Recovered"))
         _ = try await retry.value
+
+        await conversation.close()
+
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
+    }
+
+    func testConsumerCancelledMidStreamCommitsNothingAndFreesTheTurn() async throws {
+        let leases = ServiceLeaseSpy()
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(
+            client: client,
+            leases: leases
+        )
+        let collector = ChunkCollector()
+
+        let stream = try await conversation.streamResponse(to: "First question")
+        let consumer = Task { try await aggregated(stream, into: collector) }
+        await client.emit("Partial answer")
+        await collector.waitUntilCount(1)
+        consumer.cancel()
+
+        do {
+            _ = try await consumer.value
+            XCTFail("Expected the cancelled consumer to fail")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        await client.waitUntilCancelledSourceCount(1)
+        let afterCancellation = await conversation.committedMessagesForTesting()
+        XCTAssertEqual(afterCancellation.map(\.role), ["system"])
+
+        let second = Task { try await respond(conversation, to: "Second question") }
+        await client.waitUntilChatCount(2)
+        let snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatMessages[1].map(\.role), ["system", "user"])
+        XCTAssertFalse(
+            snapshot.chatMessages[1].contains(where: {
+                $0.content.contains("Partial answer")
+                    || $0.content.contains("First question")
+            })
+        )
+        await client.completeNextChat(with: .success("Second answer"))
+        let secondAnswer = try await second.value
+        XCTAssertEqual(secondAnswer, "Second answer")
+
+        await conversation.close()
+
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
     func testEveryResponseRevalidatesAndDoesNotChatAfterModelBecomesRemote() async throws {
-        let client = ModelChangeClient(validationResults: [
+        let client = ControlledStreamClient(validationResults: [
             .success,
             .localError(.remoteModelRejected),
         ])
-        let conversation = OllamaConversation(
+        let conversation = try await makeConversation(
             client: client,
-            modelID: modelID,
             context: .init(text: "sanitized-only-context")
         )
 
-        let firstAnswer = try await conversation.respond(to: "First question")
+        let first = Task { try await respond(conversation, to: "First question") }
+        await client.waitUntilChatCount(1)
+        await client.completeNextChat(with: .success("Local answer"))
+        let firstAnswer = try await first.value
         XCTAssertEqual(firstAnswer, "Local answer")
 
         do {
-            _ = try await conversation.respond(to: "Blocked question")
+            _ = try await respond(conversation, to: "Blocked question")
             XCTFail("Expected the model change to block chat")
         } catch {
             XCTAssertEqual(error as? LocalAIError, .remoteModelRejected)
         }
 
         let snapshot = await client.snapshot()
-        XCTAssertEqual(snapshot.validationModelIDs, [modelID, modelID])
+        XCTAssertEqual(
+            snapshot.validationModelIDs,
+            [modelID, modelID]
+        )
         XCTAssertEqual(snapshot.chatMessages.count, 1)
         XCTAssertTrue(
             snapshot.chatMessages[0].contains(where: {
@@ -538,16 +946,140 @@ final class OllamaConversationTests: XCTestCase {
                 $0.content.contains("Blocked question")
             })
         )
+        await conversation.close()
     }
 
-    func testCloseAwaitsCancelledChatBeforeUnloadingExactlyOnce() async {
-        let client = ControlledChatLifecycleClient()
+    func testConcurrentResponsesAreSerializedAndUseCommittedHistory() async throws {
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(client: client)
+
+        let first = Task { try await respond(conversation, to: "First question") }
+        await client.waitUntilChatCount(1)
+        let secondStarted = expectation(description: "second task started")
+        let second = Task {
+            secondStarted.fulfill()
+            return try await respond(conversation, to: "Second question")
+        }
+        await fulfillment(of: [secondStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+
+        var snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatMessages.count, 1)
+
+        await client.completeNextChat(with: .success("First answer"))
+        let firstAnswer = try await first.value
+        XCTAssertEqual(firstAnswer, "First answer")
+        await client.waitUntilChatCount(2)
+        snapshot = await client.snapshot()
+        XCTAssertEqual(
+            snapshot.chatMessages[1].map(\.content).suffix(3),
+            ["First question", "First answer", "Second question"]
+        )
+        await client.completeNextChat(with: .success("Second answer"))
+        let secondAnswer = try await second.value
+        XCTAssertEqual(secondAnswer, "Second answer")
+        await conversation.close()
+    }
+
+    func testQueuedResponseIsIndependentlyCancelableWithoutStartingAChat() async throws {
+        let client = ControlledStreamClient()
+        let conversation = try await makeConversation(client: client)
+
+        let first = Task { try await respond(conversation, to: "First question") }
+        await client.waitUntilChatCount(1)
+        let queuedStarted = expectation(description: "queued task started")
+        let queued = Task {
+            queuedStarted.fulfill()
+            return try await respond(conversation, to: "Queued question")
+        }
+        await fulfillment(of: [queuedStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+        queued.cancel()
+
+        await client.completeNextChat(with: .success("First answer"))
+        let firstAnswer = try await first.value
+        XCTAssertEqual(firstAnswer, "First answer")
+
+        do {
+            _ = try await queued.value
+            XCTFail("Expected the queued response to cancel")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        var snapshot = await client.snapshot()
+        XCTAssertEqual(snapshot.chatMessages.count, 1)
+        XCTAssertFalse(
+            snapshot.chatMessages.flatMap { $0 }.contains(where: {
+                $0.content.contains("Queued question")
+            })
+        )
+
+        let survivor = Task { try await respond(conversation, to: "Survivor") }
+        await client.waitUntilChatCount(2)
+        await client.completeNextChat(with: .success("Survivor answer"))
+        let survivorAnswer = try await survivor.value
+        XCTAssertEqual(survivorAnswer, "Survivor answer")
+        snapshot = await client.snapshot()
+        XCTAssertEqual(
+            snapshot.chatMessages[1].map(\.content).suffix(3),
+            ["First question", "First answer", "Survivor"]
+        )
+        await conversation.close()
+    }
+
+    // MARK: - Close
+
+    func testCloseCancelsAnOpenStreamThenUnloadsBeforeReleasingTheLease() async throws {
+        let log = ServiceEventLog()
+        let leases = ServiceLeaseSpy(log: log)
+        let client = ControlledStreamClient(log: log)
+        let conversation = try await makeConversation(
+            client: client,
+            leases: leases
+        )
+
+        let stream = try await conversation.streamResponse(to: "Question")
+        let consumer = Task { try await aggregated(stream) }
+        await client.emit("Partial answer")
+
+        await conversation.close()
+        await conversation.close()
+
+        do {
+            _ = try await consumer.value
+            XCTFail("Expected close to cancel the open stream")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        await client.waitUntilCancelledSourceCount(1)
+        let events = await log.recorded()
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(events, ["unload", "release"])
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
+        let clientSnapshot = await client.snapshot()
+        XCTAssertEqual(clientSnapshot.unloadModelIDs, [modelID])
+        XCTAssertEqual(clientSnapshot.cancelledSources, 1)
+        let committed = await conversation.committedMessagesForTesting()
+        XCTAssertEqual(committed.map(\.role), ["system"])
+    }
+
+    func testCloseAwaitsCancelledChatBeforeUnloadingExactlyOnce() async throws {
+        let log = ServiceEventLog()
+        let leases = ServiceLeaseSpy(log: log)
+        let client = ControlledChatLifecycleClient(log: log)
         let conversation = OllamaConversation(
             client: client,
+            lease: try await leases.acquire(),
             modelID: modelID,
             context: .init(text: "port: 3000")
         )
-        let response = Task { try await conversation.respond(to: "Question") }
+        let response = Task { try await respond(conversation, to: "Question") }
         await client.waitUntilChatStarts()
 
         let firstClose = Task { await conversation.close() }
@@ -557,6 +1089,11 @@ final class OllamaConversationTests: XCTestCase {
         var snapshot = await client.snapshot()
         XCTAssertEqual(snapshot.chatCancellationCount, 1)
         XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+        let leaseSnapshotBeforeClose = await leases.snapshot()
+        XCTAssertEqual(
+            leaseSnapshotBeforeClose,
+            LeaseSnapshot(acquires: 1, releases: 0)
+        )
 
         await client.completeChat(with: .failure(.failed))
         await firstClose.value
@@ -573,16 +1110,23 @@ final class OllamaConversationTests: XCTestCase {
         snapshot = await client.snapshot()
         XCTAssertEqual(snapshot.chatCalls, 1)
         XCTAssertEqual(snapshot.unloadModelIDs, [modelID])
+        let events = await log.recorded()
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(events, ["unload", "release"])
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
-    func testCloseAwaitsCancelledValidationWithoutChatOrUnload() async {
-        let client = ControlledValidationLifecycleClient()
+    func testCloseAwaitsCancelledValidationAndStillReleasesTheLease() async throws {
+        let log = ServiceEventLog()
+        let leases = ServiceLeaseSpy(log: log)
+        let client = ControlledValidationLifecycleClient(log: log)
         let conversation = OllamaConversation(
             client: client,
+            lease: try await leases.acquire(),
             modelID: modelID,
             context: .init(text: "port: 3000")
         )
-        let response = Task { try await conversation.respond(to: "Question") }
+        let response = Task { try await respond(conversation, to: "Question") }
         await client.waitUntilAnyRequestStarts()
 
         let close = Task { await conversation.close() }
@@ -608,47 +1152,23 @@ final class OllamaConversationTests: XCTestCase {
         snapshot = await client.snapshot()
         XCTAssertEqual(snapshot.chatCalls, 0)
         XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+        let events = await log.recorded()
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(events, ["release"])
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
-    func testConcurrentResponsesAreSerializedAndUseCommittedHistory() async throws {
-        let client = OllamaClientSpy()
-        let conversation = makeConversation(client: client)
-
-        let first = Task { try await conversation.respond(to: "First question") }
-        await client.waitUntilChatCount(1)
-        let secondStarted = expectation(description: "second task started")
-        let second = Task {
-            secondStarted.fulfill()
-            return try await conversation.respond(to: "Second question")
-        }
-        await fulfillment(of: [secondStarted], timeout: 1)
-        for _ in 0..<20 { await Task.yield() }
-
-        var snapshot = await client.snapshot()
-        XCTAssertEqual(snapshot.chatMessages.count, 1)
-
-        await client.completeNextChat(with: .success("First answer"))
-        let firstAnswer = try await first.value
-        XCTAssertEqual(firstAnswer, "First answer")
-        await client.waitUntilChatCount(2)
-        snapshot = await client.snapshot()
-        XCTAssertEqual(
-            snapshot.chatMessages[1].map(\.content).suffix(3),
-            ["First question", "First answer", "Second question"]
-        )
-        await client.completeNextChat(with: .success("Second answer"))
-        let secondAnswer = try await second.value
-        XCTAssertEqual(secondAnswer, "Second answer")
-    }
-
-    func testCloseDuringRequestRejectsLateResponseAndUnloadsExactlyOnce() async {
-        let client = ControlledChatLifecycleClient()
+    func testCloseDuringRequestRejectsLateResponseAndUnloadsExactlyOnce() async throws {
+        let log = ServiceEventLog()
+        let leases = ServiceLeaseSpy(log: log)
+        let client = ControlledChatLifecycleClient(log: log)
         let conversation = OllamaConversation(
             client: client,
+            lease: try await leases.acquire(),
             modelID: modelID,
             context: .init(text: "port: 3000")
         )
-        let response = Task { try await conversation.respond(to: "Question") }
+        let response = Task { try await respond(conversation, to: "Question") }
         await client.waitUntilChatStarts()
 
         let close = Task { await conversation.close() }
@@ -669,7 +1189,7 @@ final class OllamaConversationTests: XCTestCase {
         }
 
         do {
-            _ = try await conversation.respond(to: "After close")
+            _ = try await respond(conversation, to: "After close")
             XCTFail("Expected closed conversation to reject future use")
         } catch is CancellationError {
             // Expected.
@@ -679,11 +1199,20 @@ final class OllamaConversationTests: XCTestCase {
         snapshot = await client.snapshot()
         XCTAssertEqual(snapshot.chatCalls, 1)
         XCTAssertEqual(snapshot.unloadModelIDs, [modelID])
+        let events = await log.recorded()
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(events, ["unload", "release"])
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
     }
 
-    func testCloseBeforeFirstRequestDoesNotUnload() async {
-        let client = OllamaClientSpy()
-        let conversation = makeConversation(client: client)
+    func testCloseBeforeFirstRequestSkipsUnloadAndReleasesTheLeaseOnce() async throws {
+        let log = ServiceEventLog()
+        let leases = ServiceLeaseSpy(log: log)
+        let client = ControlledStreamClient(log: log)
+        let conversation = try await makeConversation(
+            client: client,
+            leases: leases
+        )
 
         await conversation.close()
         await conversation.close()
@@ -691,15 +1220,34 @@ final class OllamaConversationTests: XCTestCase {
         let snapshot = await client.snapshot()
         XCTAssertTrue(snapshot.chatMessages.isEmpty)
         XCTAssertTrue(snapshot.unloadModelIDs.isEmpty)
+        let events = await log.recorded()
+        let leaseSnapshot = await leases.snapshot()
+        XCTAssertEqual(events, ["release"])
+        XCTAssertEqual(leaseSnapshot, LeaseSnapshot(acquires: 1, releases: 1))
+    }
+
+    // MARK: - Helpers
+
+    private func makeProvider(
+        leases: ServiceLeaseSpy,
+        client: any OllamaClientProtocol
+    ) -> OllamaProvider {
+        OllamaProvider(
+            acquireLease: { try await leases.acquire() },
+            makeClient: { _ in client }
+        )
     }
 
     private func makeConversation(
-        client: OllamaClientSpy
-    ) -> OllamaConversation {
+        client: any OllamaClientProtocol,
+        leases: ServiceLeaseSpy = ServiceLeaseSpy(),
+        context: SanitizedProcessContext = .init(text: "port: 3000")
+    ) async throws -> OllamaConversation {
         OllamaConversation(
             client: client,
+            lease: try await leases.acquire(),
             modelID: modelID,
-            context: .init(text: "port: 3000")
+            context: context
         )
     }
 }
