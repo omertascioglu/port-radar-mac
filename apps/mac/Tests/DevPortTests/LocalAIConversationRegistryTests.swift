@@ -1,3 +1,5 @@
+// Modification notice: Added in 2026 for the local AI and optional Ollama fallback contribution, and changed for the Port Radar Offline fork's ordered exit cleanup.
+import Darwin
 import XCTest
 @testable import DevPort
 
@@ -138,54 +140,74 @@ private actor RegistryUnavailableProvider: LocalAIProvider {
     }
 }
 
-private actor TerminationCleanupProbe {
-    private var didStart = false
-    private var didFinish = false
-    private var startWaiters: [CheckedContinuation<Void, Never>] = []
-    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
-    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var isReleased = false
+/// Records the ordered application-exit steps and every deferred termination
+/// reply without touching AppKit. One step can be parked, so a test can observe
+/// exactly what has — and has not — happened while cleanup is still in flight.
+private actor TerminationSequenceRecorder {
+    private let gatedEvent: String?
+    private var events: [String] = []
+    private var replies: [Bool] = []
+    private var replyThreads: [Bool] = []
+    private var didEnterGate = false
+    private var isGateReleased = false
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+    private var gateObservers: [CheckedContinuation<Void, Never>] = []
+    private var replyWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func run() async {
-        didStart = true
-        let pendingStarts = startWaiters
-        startWaiters.removeAll()
-        pendingStarts.forEach { $0.resume() }
+    init(gatedEvent: String? = nil) {
+        self.gatedEvent = gatedEvent
+    }
 
-        if !isReleased {
+    func record(_ event: String) async {
+        events.append(event)
+        guard event == gatedEvent else { return }
+
+        didEnterGate = true
+        let observers = gateObservers
+        gateObservers.removeAll()
+        observers.forEach { $0.resume() }
+
+        guard !isGateReleased else { return }
+        await withCheckedContinuation { continuation in
+            gateWaiters.append(continuation)
+        }
+    }
+
+    func recordReply(_ shouldTerminate: Bool, onMainThread: Bool) {
+        replies.append(shouldTerminate)
+        replyThreads.append(onMainThread)
+        let waiters = replyWaiters
+        replyWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilGateEntered() async {
+        guard !didEnterGate else { return }
+        await withCheckedContinuation { continuation in
+            gateObservers.append(continuation)
+        }
+    }
+
+    func releaseGate() {
+        isGateReleased = true
+        let waiters = gateWaiters
+        gateWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForReplies(count: Int) async {
+        while replies.count < count {
             await withCheckedContinuation { continuation in
-                releaseWaiters.append(continuation)
+                replyWaiters.append(continuation)
             }
         }
-
-        didFinish = true
-        let pendingFinishes = finishWaiters
-        finishWaiters.removeAll()
-        pendingFinishes.forEach { $0.resume() }
     }
 
-    func waitUntilStarted() async {
-        guard !didStart else { return }
-        await withCheckedContinuation { continuation in
-            startWaiters.append(continuation)
-        }
-    }
+    func recordedEvents() -> [String] { events }
 
-    func release() {
-        isReleased = true
-        let pending = releaseWaiters
-        releaseWaiters.removeAll()
-        pending.forEach { $0.resume() }
-    }
+    func recordedReplies() -> [Bool] { replies }
 
-    func waitUntilFinished() async {
-        guard !didFinish else { return }
-        await withCheckedContinuation { continuation in
-            finishWaiters.append(continuation)
-        }
-    }
-
-    func finished() -> Bool { didFinish }
+    func recordedReplyThreads() -> [Bool] { replyThreads }
 }
 
 final class LocalAIConversationRegistryTests: XCTestCase {
@@ -513,19 +535,184 @@ final class LocalAIConversationRegistryTests: XCTestCase {
     }
 
     @MainActor
-    func testApplicationTerminationStartsCleanupWithoutBlocking() async {
-        let probe = TerminationCleanupProbe()
-        let delegate = AppDelegate(cleanup: { await probe.run() })
+    func testApplicationTerminationClosesConversationsThenStopsService() async {
+        let recorder = TerminationSequenceRecorder()
+        let delegate = makeTerminationDelegate(recorder: recorder)
 
-        delegate.applicationWillTerminate(
-            Notification(name: NSApplication.willTerminateNotification)
+        let reply = delegate.beginOrderedTerminationCleanup()
+        XCTAssertEqual(reply, .terminateLater)
+        await recorder.waitForReplies(count: 1)
+
+        let events = await recorder.recordedEvents()
+        let replies = await recorder.recordedReplies()
+        let replyThreads = await recorder.recordedReplyThreads()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(replies, [true])
+        XCTAssertEqual(replyThreads, [true])
+    }
+
+    @MainActor
+    func testServiceStopsAndReplyWaitsForConversationCloseToFinish() async {
+        let recorder = TerminationSequenceRecorder(
+            gatedEvent: "conversations-closed"
         )
-        await probe.waitUntilStarted()
+        let delegate = makeTerminationDelegate(recorder: recorder)
 
-        let finishedBeforeRelease = await probe.finished()
-        XCTAssertFalse(finishedBeforeRelease)
-        await probe.release()
-        await probe.waitUntilFinished()
+        _ = delegate.beginOrderedTerminationCleanup()
+        await recorder.waitUntilGateEntered()
+
+        let gatedEvents = await recorder.recordedEvents()
+        let gatedReplies = await recorder.recordedReplies()
+        XCTAssertEqual(gatedEvents, ["conversations-closed"])
+        XCTAssertTrue(gatedReplies.isEmpty)
+
+        await recorder.releaseGate()
+        await recorder.waitForReplies(count: 1)
+
+        let events = await recorder.recordedEvents()
+        let replies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(replies, [true])
+    }
+
+    @MainActor
+    func testReplyWaitsForServiceShutdownToSettle() async {
+        let recorder = TerminationSequenceRecorder(gatedEvent: "service-stopped")
+        let delegate = makeTerminationDelegate(recorder: recorder)
+
+        _ = delegate.beginOrderedTerminationCleanup()
+        await recorder.waitUntilGateEntered()
+
+        let gatedReplies = await recorder.recordedReplies()
+        XCTAssertTrue(gatedReplies.isEmpty)
+
+        await recorder.releaseGate()
+        await recorder.waitForReplies(count: 1)
+
+        let events = await recorder.recordedEvents()
+        let replies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(replies, [true])
+    }
+
+    @MainActor
+    func testRepeatedTerminationRequestsShareOneCleanupTask() async {
+        let recorder = TerminationSequenceRecorder(
+            gatedEvent: "conversations-closed"
+        )
+        let delegate = makeTerminationDelegate(recorder: recorder)
+
+        let first = delegate.beginOrderedTerminationCleanup()
+        await recorder.waitUntilGateEntered()
+        let second = delegate.beginOrderedTerminationCleanup()
+        let third = delegate.beginOrderedTerminationCleanup()
+        XCTAssertEqual(
+            [first, second, third],
+            [.terminateLater, .terminateLater, .terminateLater]
+        )
+
+        await recorder.releaseGate()
+        await recorder.waitForReplies(count: 3)
+
+        var events = await recorder.recordedEvents()
+        var replies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(replies, [true, true, true])
+
+        let afterCleanup = delegate.beginOrderedTerminationCleanup()
+        XCTAssertEqual(afterCleanup, .terminateLater)
+        await recorder.waitForReplies(count: 4)
+
+        events = await recorder.recordedEvents()
+        replies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(replies, [true, true, true, true])
+    }
+
+    @MainActor
+    func testTerminationClosesActiveConversationAndRejectsLateRegistration()
+        async
+    {
+        let registry = LocalAIConversationRegistry()
+        let active = RegistryConversationSpy()
+        _ = await registry.register(token: UUID(), conversation: active)
+        let recorder = TerminationSequenceRecorder()
+        let delegate = makeTerminationDelegate(
+            recorder: recorder,
+            registry: registry
+        )
+
+        _ = delegate.beginOrderedTerminationCleanup()
+        await recorder.waitForReplies(count: 1)
+
+        let late = RegistryConversationSpy()
+        let accepted = await registry.register(
+            token: UUID(),
+            conversation: late
+        )
+
+        let events = await recorder.recordedEvents()
+        let activeCloseCount = await active.recordedCloseCount()
+        let lateCloseCount = await late.recordedCloseCount()
+        let hasActive = await registry.hasActiveConversationForTesting()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertNil(accepted)
+        XCTAssertEqual(activeCloseCount, 1)
+        XCTAssertEqual(lateCloseCount, 1)
+        XCTAssertFalse(hasActive)
+    }
+
+    @MainActor
+    func testChatCloseRacingTerminationClosesConversationExactlyOnce() async {
+        let registry = LocalAIConversationRegistry()
+        let conversation = RegistryConversationSpy()
+        let model = makeChatModel(
+            conversation: conversation,
+            registry: registry
+        )
+        await model.bootstrap()
+        let recorder = TerminationSequenceRecorder()
+        let delegate = makeTerminationDelegate(
+            recorder: recorder,
+            registry: registry
+        )
+
+        async let modalClose: Void = model.close()
+        _ = delegate.beginOrderedTerminationCleanup()
+        await modalClose
+        await recorder.waitForReplies(count: 1)
+
+        let events = await recorder.recordedEvents()
+        let closeCount = await conversation.recordedCloseCount()
+        let hasActive = await registry.hasActiveConversationForTesting()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(closeCount, 1)
+        XCTAssertFalse(hasActive)
+    }
+
+    @MainActor
+    private func makeTerminationDelegate(
+        recorder: TerminationSequenceRecorder,
+        registry: LocalAIConversationRegistry? = nil
+    ) -> AppDelegate {
+        AppDelegate(
+            closeConversations: {
+                await registry?.closeActive()
+                await recorder.record("conversations-closed")
+            },
+            stopPrivateService: {
+                await recorder.record("service-stopped")
+            },
+            sendTerminationReply: { shouldTerminate in
+                // AppKit only accepts the deferred reply from the main thread,
+                // so record where the reply action actually ran.
+                let isMainThread = pthread_main_np() != 0
+                await recorder.recordReply(
+                    shouldTerminate,
+                    onMainThread: isMainThread
+                )
+            }
+        )
     }
 
     @MainActor

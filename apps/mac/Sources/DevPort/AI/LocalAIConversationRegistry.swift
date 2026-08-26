@@ -1,3 +1,4 @@
+// Modification notice: Added in 2026 for the local AI and optional Ollama fallback contribution, and changed for the Port Radar Offline fork's ordered exit cleanup.
 import Foundation
 
 actor LocalAIConversationRegistry {
@@ -7,6 +8,8 @@ actor LocalAIConversationRegistry {
         (token: UUID, conversation: ManagedLocalAIConversation)?
     // closeActive is the one-way app-termination barrier: late resolutions
     // are closed instead of becoming newly owned while the app is exiting.
+    // App exit runs it before the private service shutdown, so conversations
+    // unload their models and release their leases first.
     private var isTerminating = false
     private var operationInProgress = false
     private var operationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -49,6 +52,12 @@ actor LocalAIConversationRegistry {
         active = nil
         await current?.conversation.close()
     }
+
+#if DEBUG
+    func hasActiveConversationForTesting() -> Bool {
+        active != nil
+    }
+#endif
 
     private func acquireOperation() async {
         guard operationInProgress else {

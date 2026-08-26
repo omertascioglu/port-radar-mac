@@ -1,4 +1,5 @@
 // Modification notice: Added in 2026 for the Port Radar Offline fork.
+import AppKit
 import Foundation
 import XCTest
 @testable import DevPort
@@ -272,6 +273,42 @@ private actor ExitDuringSuccessfulProbeFake: OllamaServiceReadinessProbing {
             childWasRunningBeforeProbeResult: childWasRunningBeforeProbeResult
         )
     }
+}
+
+/// Records each application-exit step together with the controller stop count
+/// observed at that moment, so a test can prove the private service is only
+/// stopped after conversation cleanup has finished.
+private actor ExitSequenceRecorder {
+    private var events: [String] = []
+    private var observedStopCounts: [Int] = []
+    private var replies: [Bool] = []
+    private var replyWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func record(_ event: String, observedStopCount: Int) {
+        events.append(event)
+        observedStopCounts.append(observedStopCount)
+    }
+
+    func recordReply(_ shouldTerminate: Bool) {
+        replies.append(shouldTerminate)
+        let waiters = replyWaiters
+        replyWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForReplies(count: Int) async {
+        while replies.count < count {
+            await withCheckedContinuation { continuation in
+                replyWaiters.append(continuation)
+            }
+        }
+    }
+
+    func recordedEvents() -> [String] { events }
+
+    func recordedStopCounts() -> [Int] { observedStopCounts }
+
+    func recordedReplies() -> [Bool] { replies }
 }
 
 private actor ServiceSleepRecorder {
@@ -700,6 +737,145 @@ final class OllamaServiceManagerTests: XCTestCase {
         XCTAssertTrue(unrelatedIsRunning)
     }
 
+    @MainActor
+    func testApplicationExitStopsOwnedServiceAfterConversationsClose()
+        async throws
+    {
+        let process = ServiceOwnedProcessFake(processIdentifier: 4119)
+        let controller = ServiceProcessControllerFake(processes: [process])
+        let probe = ServiceProbeFake(results: [.success(readyResponse())])
+        let manager = makeManager(controller: controller, probe: probe)
+        let lease = try await manager.acquire()
+        let recorder = ExitSequenceRecorder()
+        let delegate = makeExitDelegate(
+            recorder: recorder,
+            controller: controller,
+            manager: manager
+        )
+
+        let reply = delegate.beginOrderedTerminationCleanup()
+        XCTAssertEqual(reply, .terminateLater)
+        await recorder.waitForReplies(count: 1)
+
+        let events = await recorder.recordedEvents()
+        let stopCounts = await recorder.recordedStopCounts()
+        let replies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(stopCounts, [0, 1])
+        XCTAssertEqual(replies, [true])
+
+        await assertPrivateServiceFailure { _ = try await manager.acquire() }
+        await lease.release()
+
+        let snapshot = await controller.snapshot()
+        let processIsRunning = await process.isRunning
+        XCTAssertEqual(snapshot.startCount, 1)
+        XCTAssertEqual(snapshot.stopCount, 1)
+        XCTAssertFalse(processIsRunning)
+    }
+
+    @MainActor
+    func testApplicationExitDuringStartupStopsChildAndRejectsLateAcquire()
+        async
+    {
+        let process = ServiceOwnedProcessFake(processIdentifier: 4120)
+        let controller = ServiceProcessControllerFake(processes: [process])
+        let probe = CancellationProbeFake()
+        let manager = makeManager(controller: controller, probe: probe)
+        let acquireTask = Task { try await manager.acquire() }
+        await probe.waitForStart()
+        let recorder = ExitSequenceRecorder()
+        let delegate = makeExitDelegate(
+            recorder: recorder,
+            controller: controller,
+            manager: manager
+        )
+
+        let reply = delegate.beginOrderedTerminationCleanup()
+        XCTAssertEqual(reply, .terminateLater)
+        await recorder.waitForReplies(count: 1)
+
+        await assertPrivateServiceFailure { _ = try await acquireTask.value }
+        await assertPrivateServiceFailure { _ = try await manager.acquire() }
+
+        let events = await recorder.recordedEvents()
+        let stopCounts = await recorder.recordedStopCounts()
+        let snapshot = await controller.snapshot()
+        let processIsRunning = await process.isRunning
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(stopCounts, [0, 1])
+        XCTAssertEqual(snapshot.startCount, 1)
+        XCTAssertEqual(snapshot.stopCount, 1)
+        XCTAssertFalse(processIsRunning)
+    }
+
+    @MainActor
+    func testRepeatedExitRequestsStopTheServiceExactlyOnce() async throws {
+        let process = ServiceOwnedProcessFake(processIdentifier: 4121)
+        let controller = ServiceProcessControllerFake(processes: [process])
+        let probe = ServiceProbeFake(results: [.success(readyResponse())])
+        let manager = makeManager(controller: controller, probe: probe)
+        let lease = try await manager.acquire()
+        let recorder = ExitSequenceRecorder()
+        let delegate = makeExitDelegate(
+            recorder: recorder,
+            controller: controller,
+            manager: manager
+        )
+
+        let replies = (0..<3).map { _ in
+            delegate.beginOrderedTerminationCleanup()
+        }
+        XCTAssertEqual(
+            replies,
+            [.terminateLater, .terminateLater, .terminateLater]
+        )
+        await recorder.waitForReplies(count: 3)
+        _ = delegate.beginOrderedTerminationCleanup()
+        await recorder.waitForReplies(count: 4)
+
+        let events = await recorder.recordedEvents()
+        let recordedReplies = await recorder.recordedReplies()
+        XCTAssertEqual(events, ["conversations-closed", "service-stopped"])
+        XCTAssertEqual(recordedReplies, [true, true, true, true])
+
+        await assertPrivateServiceFailure { _ = try await manager.acquire() }
+        await lease.release()
+
+        let snapshot = await controller.snapshot()
+        XCTAssertEqual(snapshot.startCount, 1)
+        XCTAssertEqual(snapshot.stopCount, 1)
+        XCTAssertEqual(snapshot.events, ["start", "stop-began", "stop-ended"])
+    }
+
+    @MainActor
+    private func makeExitDelegate(
+        recorder: ExitSequenceRecorder,
+        controller: ServiceProcessControllerFake,
+        manager: OllamaServiceManager
+    ) -> AppDelegate {
+        AppDelegate(
+            closeConversations: {
+                let snapshot = await controller.snapshot()
+                await recorder.record(
+                    "conversations-closed",
+                    observedStopCount: snapshot.stopCount
+                )
+            },
+            stopPrivateService: {
+                await manager.shutdownAll()
+                let snapshot = await controller.snapshot()
+                await recorder.record(
+                    "service-stopped",
+                    observedStopCount: snapshot.stopCount
+                )
+            },
+            sendTerminationReply: { shouldTerminate in
+                await recorder.recordReply(shouldTerminate)
+            }
+        )
+    }
+
     private func makeManager(
         controller: ServiceProcessControllerFake,
         portAvailable: Bool = true,
@@ -727,6 +903,7 @@ final class OllamaServiceManagerTests: XCTestCase {
     }
 
     private func assertPrivateServiceFailure(
+        isolation: isolated (any Actor)? = #isolation,
         _ operation: () async throws -> Void,
         file: StaticString = #filePath,
         line: UInt = #line
