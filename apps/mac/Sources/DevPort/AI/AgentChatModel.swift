@@ -8,9 +8,17 @@ struct AgentMessage: Identifiable, Equatable {
         case system
     }
 
-    let id = UUID()
+    let id: UUID
     let role: Role
     var text: String
+
+    /// A caller-supplied ID lets streamed chunks mutate one assistant message
+    /// instead of appending a bubble per chunk.
+    init(id: UUID = UUID(), role: Role, text: String) {
+        self.id = id
+        self.role = role
+        self.text = text
+    }
 }
 
 @MainActor
@@ -31,6 +39,9 @@ final class AgentChatModel {
     private(set) var isSending = false
     private(set) var availabilityNote: String?
     private(set) var badgeText: String?
+    /// Bumped by every streamed change, so the chat can follow a reply that
+    /// grows inside one message instead of only reacting to new messages.
+    private(set) var streamRevision = 0
 
     private var conversation: (any LocalAIConversation)?
     private var bootstrapTask: Task<Void, Never>?
@@ -94,8 +105,11 @@ final class AgentChatModel {
         guard canSend, let conversation, !prompt.isEmpty else { return }
 
         draft = ""
+        let placeholder = AgentMessage(role: .assistant, text: "")
         messages.append(.init(role: .user, text: prompt))
+        messages.append(placeholder)
         isSending = true
+        streamRevision &+= 1
         generationAttempt &+= 1
         let attempt = generationAttempt
         let task = Task { @MainActor [weak self] in
@@ -103,10 +117,17 @@ final class AgentChatModel {
             await self.performGeneration(
                 prompt: prompt,
                 conversation: conversation,
-                attempt: attempt
+                attempt: attempt,
+                messageID: placeholder.id
             )
         }
         generationTask = task
+    }
+
+    /// Cancels the streaming turn without closing the conversation, so the
+    /// received partial text stays on screen and the next question still works.
+    func stopGeneration() {
+        generationTask?.cancel()
     }
 
     /// Starts idempotent cleanup without requiring an untracked view task.
@@ -204,25 +225,32 @@ final class AgentChatModel {
         }
     }
 
+    /// Renders chunks into the placeholder as they arrive. A cancelled consumer
+    /// is handed `nil` by the stream rather than an error, so cancellation is
+    /// checked explicitly: a stopped turn keeps what it already showed and a
+    /// buffered chunk can never land after the stop.
     private func performGeneration(
         prompt: String,
         conversation: any LocalAIConversation,
-        attempt: Int
+        attempt: Int,
+        messageID: UUID
     ) async {
         do {
-            let response = try await Self.aggregated(
-                conversation.streamResponse(to: prompt)
-            )
+            let stream = try await conversation.streamResponse(to: prompt)
             try Task.checkCancellation()
-            guard !isClosed, generationAttempt == attempt else { return }
-            messages.append(.init(role: .assistant, text: response))
+            for try await chunk in stream {
+                try Task.checkCancellation()
+                guard applyChunk(chunk, attempt: attempt, messageID: messageID)
+                else { break }
+            }
+            try Task.checkCancellation()
         } catch {
             guard !isClosed,
                   generationAttempt == attempt,
                   !Task.isCancelled,
                   !Self.isCancellation(error)
             else {
-                finishGeneration(attempt: attempt)
+                finishGeneration(attempt: attempt, messageID: messageID)
                 return
             }
             messages.append(.init(
@@ -233,30 +261,42 @@ final class AgentChatModel {
                 )
             ))
         }
-        finishGeneration(attempt: attempt)
+        finishGeneration(attempt: attempt, messageID: messageID)
     }
 
-    private func finishGeneration(attempt: Int) {
+    /// Appends to the streaming placeholder only while the attempt, the message
+    /// and the open state all still match, so a superseded or closed turn can
+    /// never revive cleared state.
+    private func applyChunk(
+        _ chunk: String,
+        attempt: Int,
+        messageID: UUID
+    ) -> Bool {
+        guard !isClosed,
+              generationAttempt == attempt,
+              let index = messages.firstIndex(where: { $0.id == messageID })
+        else { return false }
+
+        messages[index].text += chunk
+        streamRevision &+= 1
+        return true
+    }
+
+    private func finishGeneration(attempt: Int, messageID: UUID) {
         guard !isClosed, generationAttempt == attempt else { return }
+        discardEmptyPlaceholder(messageID)
         generationTask = nil
         isSending = false
     }
 
-    /// This turn still commits one finished reply, so the streamed chunks are
-    /// joined here; incremental rendering is owned by the chat UI task. A
-    /// cancelled consumer is handed `nil` by the stream rather than an error,
-    /// so cancellation is checked explicitly and a partial reply can never be
-    /// committed as a success.
-    private static func aggregated(
-        _ stream: LocalAITextStream
-    ) async throws -> String {
-        var reply = ""
-        for try await chunk in stream {
-            try Task.checkCancellation()
-            reply += chunk
-        }
-        try Task.checkCancellation()
-        return reply
+    /// A turn that ended before its first chunk leaves no empty bubble behind.
+    private func discardEmptyPlaceholder(_ messageID: UUID) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }),
+              messages[index].text.isEmpty
+        else { return }
+
+        messages.remove(at: index)
+        streamRevision &+= 1
     }
 
     private static func isCancellation(_ error: any Error) -> Bool {

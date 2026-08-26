@@ -2,6 +2,8 @@
 import SwiftUI
 
 struct AgentChatModal: View {
+    private static let streamingRowID = "streaming"
+
     let server: DevServer
     let onDismiss: () -> Void
 
@@ -117,19 +119,16 @@ struct AgentChatModal: View {
                                 .id(message.id)
                         }
                         if model.isSending {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text("Thinking…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .id("thinking")
+                            streamingRow
+                                .id(Self.streamingRowID)
                         }
                     }
                     .padding(12)
                 }
                 .onChange(of: model.messages.count) { _, _ in
+                    scrollToBottom(proxy)
+                }
+                .onChange(of: model.streamRevision) { _, _ in
                     scrollToBottom(proxy)
                 }
                 .onChange(of: model.isSending) { _, _ in
@@ -165,7 +164,38 @@ struct AgentChatModal: View {
                 .help("Send")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Text("Offline — data never leaves this Mac.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+        }
+    }
+
+    /// Replaces the passive thinking row: the same progress indicator now sits
+    /// next to the control that stops the streaming reply.
+    private var streamingRow: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+            Button(action: model.stopGeneration) {
+                HStack(spacing: 4) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 8))
+                    Text("Stop")
+                        .font(.caption)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.09), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop response")
+            .help("Stop response")
         }
     }
 
@@ -187,6 +217,9 @@ struct AgentChatModal: View {
                         )
                     )
             }
+        case .assistant where message.text.isEmpty:
+            // The streaming placeholder stays invisible until its first chunk.
+            EmptyView()
         case .assistant:
             HStack {
                 Text(message.text)
@@ -220,7 +253,7 @@ struct AgentChatModal: View {
         DispatchQueue.main.async {
             withAnimation(.easeOut(duration: 0.15)) {
                 if model.isSending {
-                    proxy.scrollTo("thinking", anchor: .bottom)
+                    proxy.scrollTo(Self.streamingRowID, anchor: .bottom)
                 } else if let last = model.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }

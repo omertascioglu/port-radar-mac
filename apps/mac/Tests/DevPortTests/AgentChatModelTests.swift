@@ -124,6 +124,73 @@ private actor ImmediateConversationSpy: LocalAIConversation {
     }
 }
 
+private struct StreamingConversationSnapshot: Sendable {
+    let prompts: [String]
+    let closeCount: Int
+}
+
+/// Holds one stream open so the test drives chunk delivery, cancellation, and
+/// failure explicitly instead of waiting on wall-clock time.
+private actor StreamingConversationSpy: LocalAIConversation {
+    nonisolated let providerID: LocalAIProviderID
+
+    private var prompts: [String] = []
+    private var closeCount = 0
+    private var continuation: LocalAITextStream.Continuation?
+    private var startWaiters: [
+        (promptCount: Int, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+
+    init(providerID: LocalAIProviderID = .ollama) {
+        self.providerID = providerID
+    }
+
+    func streamResponse(to prompt: String) async throws -> LocalAITextStream {
+        prompts.append(prompt)
+        let (stream, continuation) = LocalAITextStream.makeStream()
+        self.continuation = continuation
+        releaseStartWaiters()
+        return stream
+    }
+
+    func close() async {
+        closeCount += 1
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func emit(_ chunk: String) {
+        continuation?.yield(chunk)
+    }
+
+    func finishStream() {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func failStream(_ error: any Error & Sendable) {
+        continuation?.finish(throwing: error)
+        continuation = nil
+    }
+
+    func waitUntilStreaming(promptCount: Int = 1) async {
+        guard prompts.count < promptCount else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append((promptCount, continuation))
+        }
+    }
+
+    func snapshot() -> StreamingConversationSnapshot {
+        .init(prompts: prompts, closeCount: closeCount)
+    }
+
+    private func releaseStartWaiters() {
+        let ready = startWaiters.filter { prompts.count >= $0.promptCount }
+        startWaiters.removeAll { prompts.count >= $0.promptCount }
+        ready.forEach { $0.continuation.resume() }
+    }
+}
+
 private actor ControlledConversationSpy: LocalAIConversation {
     nonisolated let providerID: LocalAIProviderID
 
@@ -451,6 +518,279 @@ final class AgentChatModelTests: XCTestCase {
         XCTAssertTrue(model.messages.allSatisfy { $0.role != .user })
     }
 
+    func testSendInsertsUserMessageAndEmptyAssistantPlaceholder() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "What is this?"
+
+        model.send()
+
+        XCTAssertEqual(model.messages.map(\.role), [.system, .user, .assistant])
+        XCTAssertEqual(model.messages[1].text, "What is this?")
+        XCTAssertEqual(model.messages[2].text, "")
+        XCTAssertTrue(model.isSending)
+
+        await model.close()
+    }
+
+    func testStreamedChunksMutateOneAssistantMessageBeforeCompletion() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Explain"
+        model.send()
+        let placeholderID = model.messages[2].id
+        await conversation.waitUntilStreaming()
+
+        await conversation.emit("Port ")
+        await waitUntil { model.messages[2].text == "Port " }
+        XCTAssertEqual(model.messages.count, 3)
+        await conversation.emit("3000 is busy.")
+        await waitUntil { model.messages[2].text == "Port 3000 is busy." }
+
+        XCTAssertEqual(model.messages.count, 3)
+        XCTAssertEqual(model.messages[2].id, placeholderID)
+        XCTAssertEqual(model.messages[2].role, .assistant)
+
+        await conversation.finishStream()
+        await waitUntil { !model.isSending }
+
+        XCTAssertEqual(model.messages.map(\.role), [.system, .user, .assistant])
+        XCTAssertEqual(model.messages[2].id, placeholderID)
+        XCTAssertEqual(model.messages[2].text, "Port 3000 is busy.")
+
+        await model.close()
+    }
+
+    func testIsSendingStaysTrueWhileStreamRemainsOpen() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Stay open"
+        model.send()
+        await conversation.waitUntilStreaming()
+
+        await conversation.emit("Still streaming")
+        await waitUntil { model.messages[2].text == "Still streaming" }
+
+        XCTAssertTrue(model.isSending)
+        model.draft = "Blocked follow up"
+        XCTAssertFalse(model.canSend)
+
+        await conversation.finishStream()
+        await waitUntil { !model.isSending }
+
+        XCTAssertTrue(model.canSend)
+
+        await model.close()
+    }
+
+    func testStopGenerationKeepsPartialTextAndRestoresSendability() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Long answer"
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("Partial answer")
+        await waitUntil { model.messages[2].text == "Partial answer" }
+
+        model.stopGeneration()
+        await waitUntil { !model.isSending }
+
+        XCTAssertEqual(model.messages.map(\.role), [.system, .user, .assistant])
+        XCTAssertEqual(model.messages[2].text, "Partial answer")
+        // Only the bootstrap disclosure: cancellation must add no error bubble.
+        XCTAssertEqual(model.messages.filter { $0.role == .system }.count, 1)
+
+        // A stopped partial is never completed by late provider output.
+        await conversation.emit(" late tail")
+        await conversation.finishStream()
+        await settle()
+
+        XCTAssertEqual(model.messages.count, 3)
+        XCTAssertEqual(model.messages[2].text, "Partial answer")
+        XCTAssertFalse(model.isSending)
+
+        model.draft = "Follow up"
+        XCTAssertTrue(model.canSend)
+        model.send()
+        await conversation.waitUntilStreaming(promptCount: 2)
+
+        let snapshot = await conversation.snapshot()
+        XCTAssertEqual(snapshot.prompts, ["Long answer", "Follow up"])
+        XCTAssertEqual(snapshot.closeCount, 0)
+
+        await model.close()
+    }
+
+    func testStopGenerationWithoutActiveRequestIsHarmless() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+
+        model.stopGeneration()
+        model.draft = "Still works"
+        model.stopGeneration()
+
+        XCTAssertEqual(model.messages.count, 1)
+        XCTAssertFalse(model.isSending)
+        XCTAssertTrue(model.canSend)
+
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("An answer")
+        await conversation.finishStream()
+        await waitUntil { !model.isSending }
+
+        XCTAssertEqual(model.messages.map(\.role), [.system, .user, .assistant])
+        XCTAssertEqual(model.messages[2].text, "An answer")
+
+        await model.close()
+    }
+
+    func testMidStreamFailureKeepsPartialTextAndAppendsOneBoundedError() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Will fail"
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("Partial answer")
+        await waitUntil { model.messages[2].text == "Partial answer" }
+
+        await conversation.failStream(AgentChatSyntheticError.secretBearing)
+        await waitUntil { !model.isSending }
+
+        XCTAssertEqual(
+            model.messages.map(\.role),
+            [.system, .user, .assistant, .system]
+        )
+        XCTAssertEqual(model.messages[2].text, "Partial answer")
+        XCTAssertEqual(
+            model.messages[3].text,
+            "The local model could not complete the request."
+        )
+        XCTAssertFalse(model.messages.contains {
+            $0.text.contains("synthetic-secret")
+        })
+        XCTAssertNil(model.availabilityNote)
+
+        await model.close()
+    }
+
+    func testMidStreamCancellationKeepsPartialTextWithoutErrorBubble() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Will be cancelled"
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("Partial answer")
+        await waitUntil { model.messages[2].text == "Partial answer" }
+
+        await conversation.failStream(CancellationError())
+        await waitUntil { !model.isSending }
+
+        XCTAssertEqual(model.messages.map(\.role), [.system, .user, .assistant])
+        XCTAssertEqual(model.messages[2].text, "Partial answer")
+        XCTAssertNil(model.availabilityNote)
+
+        await model.close()
+    }
+
+    func testCloseDuringStreamIgnoresLateChunks() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "Closed mid stream"
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("Partial answer")
+        await waitUntil { model.messages[2].text == "Partial answer" }
+
+        model.beginClose()
+        await conversation.emit(" late tail")
+        await conversation.finishStream()
+        await model.close()
+        await settle()
+
+        XCTAssertTrue(model.messages.isEmpty)
+        XCTAssertFalse(model.isSending)
+        XCTAssertNil(model.availabilityNote)
+        let snapshot = await conversation.snapshot()
+        XCTAssertEqual(snapshot.closeCount, 1)
+    }
+
+    func testSecondSendCannotOverlapAnOpenStream() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        model.draft = "First"
+        model.send()
+        await conversation.waitUntilStreaming()
+        await conversation.emit("Partial answer")
+        await waitUntil { model.messages[2].text == "Partial answer" }
+
+        model.draft = "Second"
+        XCTAssertFalse(model.canSend)
+        model.send()
+        await settle()
+
+        var snapshot = await conversation.snapshot()
+        XCTAssertEqual(snapshot.prompts, ["First"])
+        XCTAssertEqual(
+            model.messages.filter { $0.role == .user }.map(\.text),
+            ["First"]
+        )
+        XCTAssertEqual(model.messages.filter { $0.role == .assistant }.count, 1)
+        XCTAssertEqual(model.draft, "Second")
+
+        await conversation.finishStream()
+        await waitUntil { !model.isSending }
+
+        snapshot = await conversation.snapshot()
+        XCTAssertEqual(snapshot.prompts, ["First"])
+        XCTAssertEqual(model.messages[2].text, "Partial answer")
+
+        await model.close()
+    }
+
+    func testStreamChangesIncrementScrollRevision() async {
+        let conversation = StreamingConversationSpy()
+        let model = await makeStreamingModel(conversation)
+        let beforeSend = model.streamRevision
+        model.draft = "Revise"
+
+        model.send()
+        let afterSend = model.streamRevision
+        XCTAssertGreaterThan(afterSend, beforeSend)
+
+        await conversation.waitUntilStreaming()
+        await conversation.emit("one")
+        await waitUntil { model.messages[2].text == "one" }
+        let afterFirstChunk = model.streamRevision
+        XCTAssertGreaterThan(afterFirstChunk, afterSend)
+
+        await conversation.emit(" two")
+        await waitUntil { model.messages[2].text == "one two" }
+        XCTAssertGreaterThan(model.streamRevision, afterFirstChunk)
+
+        await conversation.finishStream()
+        await waitUntil { !model.isSending }
+
+        await model.close()
+    }
+
+    func testChatViewOffersStopControlAndOfflinePrivacyCopy() throws {
+        let text = try chatViewSource()
+
+        XCTAssertTrue(text.contains("model.stopGeneration"))
+        XCTAssertTrue(text.contains("ProgressView()"))
+        XCTAssertTrue(text.contains(".accessibilityLabel(\"Stop response\")"))
+        XCTAssertTrue(
+            text.contains("Text(\"Offline — data never leaves this Mac.\")")
+        )
+        XCTAssertTrue(text.contains("onChange(of: model.streamRevision)"))
+        XCTAssertTrue(text.contains(".disabled(!model.canSend)"))
+        XCTAssertTrue(
+            text.contains("case .assistant where message.text.isEmpty:")
+        )
+        XCTAssertFalse(text.contains("Thinking…"))
+    }
+
     func testCancellationAddsNoErrorBubble() async {
         let conversation = CancellationAwareConversationSpy(
             providerID: .ollama
@@ -685,6 +1025,24 @@ final class AgentChatModelTests: XCTestCase {
         )
     }
 
+    private func makeStreamingModel(
+        _ conversation: StreamingConversationSpy
+    ) async -> AgentChatModel {
+        let provider = ChatProviderSpy(id: .ollama, conversation: conversation)
+        let model = makeModel(provider: provider, preference: .ollama)
+        await model.bootstrap()
+        return model
+    }
+
+    private func chatViewSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevPort/Views/AgentChatView.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     private func makeModel(
         provider: any LocalAIProvider,
         preference: LocalAIProviderPreference,
@@ -737,6 +1095,14 @@ final class AgentChatModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Condition did not become true", file: file, line: line)
+    }
+
+    /// Drains the cooperative queues so a late chunk, if the model wrongly
+    /// accepted one, would already be visible when the assertion runs.
+    private func settle() async {
+        for _ in 0..<100 {
+            await Task.yield()
+        }
     }
 
     private func waitUntilConversationCloses(
