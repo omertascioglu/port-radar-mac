@@ -105,9 +105,20 @@ struct SettingsModal: View {
                                     .pickerStyle(.menu)
                                     .frame(maxWidth: 170)
                                 default:
-                                    Text("None")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    // Before a check there is no list to pick
+                                    // from, so the row reports the model Ask
+                                    // would actually use.
+                                    Text(
+                                        ollamaSettings.state
+                                            .selectedModelSummary(
+                                                persistedModelID:
+                                                    preferences.ollamaModelID
+                                            )
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                 }
                             }
 

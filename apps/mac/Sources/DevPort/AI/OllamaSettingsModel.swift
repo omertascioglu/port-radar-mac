@@ -53,6 +53,19 @@ final class OllamaSettingsModel {
                 + "Port Radar Offline, then check again."
         }
 
+        /// What the model row says when there is no picker to show. A persisted
+        /// selection is always reported, because that is the model Ask uses
+        /// whether or not this check ran; `None` is reserved for a finished
+        /// check that turned up nothing to choose.
+        func selectedModelSummary(persistedModelID: String) -> String {
+            guard persistedModelID.isEmpty else { return persistedModelID }
+
+            switch self {
+            case .idle, .loading: return "Not checked"
+            case .ready, .notRunning, .failed: return "None"
+            }
+        }
+
         /// Title of the only control that starts a check. Nothing else in
         /// Settings starts the private service.
         var checkButtonTitle: String {

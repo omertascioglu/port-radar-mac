@@ -125,6 +125,53 @@ final class LocalAIStatusTextTests: XCTestCase {
         }
     }
 
+    func testModelRowStatesThePersistedSelectionBeforeAnyCheck() {
+        let states: [OllamaSettingsModel.State] = [
+            .idle,
+            .loading,
+            .notRunning,
+            .failed("Unable to check local Ollama models."),
+            .ready([]),
+        ]
+
+        for state in states {
+            XCTAssertEqual(
+                state.selectedModelSummary(persistedModelID: qwen.id),
+                "qwen3:4b",
+                "\(state)"
+            )
+        }
+    }
+
+    func testModelRowSaysNoneOnlyAfterACheckFoundNothing() {
+        XCTAssertEqual(
+            OllamaSettingsModel.State.ready([])
+                .selectedModelSummary(persistedModelID: ""),
+            "None"
+        )
+        XCTAssertEqual(
+            OllamaSettingsModel.State.notRunning
+                .selectedModelSummary(persistedModelID: ""),
+            "None"
+        )
+        XCTAssertEqual(
+            OllamaSettingsModel.State
+                .failed("Unable to check local Ollama models.")
+                .selectedModelSummary(persistedModelID: ""),
+            "None"
+        )
+        XCTAssertEqual(
+            OllamaSettingsModel.State.idle
+                .selectedModelSummary(persistedModelID: ""),
+            "Not checked"
+        )
+        XCTAssertEqual(
+            OllamaSettingsModel.State.loading
+                .selectedModelSummary(persistedModelID: ""),
+            "Not checked"
+        )
+    }
+
     func testOllamaControlsAreVisibleForAutomaticAndOllamaOnly() {
         XCTAssertTrue(LocalAIProviderPreference.automatic.usesOllamaControls)
         XCTAssertFalse(LocalAIProviderPreference.apple.usesOllamaControls)
@@ -181,6 +228,10 @@ final class LocalAIStatusTextTests: XCTestCase {
         XCTAssertTrue(
             text.contains("selection: $preferences.localAIProviderPreference")
         )
+        // The model row never claims "None" on its own: it reports whatever is
+        // persisted, so Settings cannot contradict what Ask actually uses.
+        XCTAssertTrue(text.contains(".selectedModelSummary("))
+        XCTAssertFalse(text.contains("Text(\"None\")"))
         XCTAssertFalse(text.contains("Link("))
         XCTAssertFalse(text.contains("URL("))
         XCTAssertFalse(text.lowercased().contains("http"))
@@ -188,6 +239,38 @@ final class LocalAIStatusTextTests: XCTestCase {
         XCTAssertFalse(text.contains("Open Ollama"))
         XCTAssertFalse(text.contains("openOllama"))
         XCTAssertFalse(text.contains("showsDownloadLink"))
+    }
+
+    /// Locks the launch-only-on-explicit-press rule: the private local service
+    /// must never start because a view appeared or a preference changed.
+    func testOnlyTheCheckButtonStartsARefresh() throws {
+        let text = try settingsViewSource()
+        let callSite = "ollamaSettings.refresh("
+
+        XCTAssertEqual(
+            text.components(separatedBy: callSite).count - 1,
+            1,
+            "Only the check button may start a refresh"
+        )
+        XCTAssertFalse(text.contains("updateOllamaRefresh"))
+
+        let buttonStart = try XCTUnwrap(
+            text.range(of: "Button(ollamaSettings.state.checkButtonTitle)")
+        )
+        let refreshStart = try XCTUnwrap(text.range(of: callSite))
+        XCTAssertTrue(refreshStart.lowerBound > buttonStart.lowerBound)
+
+        let lifecycleHooks = [
+            ".onAppear {",
+            ".onChange(of: preferences.askAboutProcessEnabled) {",
+            ".onChange(of: preferences.localAIProviderPreference) {",
+            ".onDisappear {",
+        ]
+        for hook in lifecycleHooks {
+            let body = try closureBody(after: hook, in: text)
+            XCTAssertFalse(body.contains(callSite), hook)
+            XCTAssertFalse(body.isEmpty, hook)
+        }
     }
 
     func testShippingSourcesOfferNoOllamaDownloadOrLaunchPath() throws {
@@ -214,6 +297,35 @@ final class LocalAIStatusTextTests: XCTestCase {
         }
 
         XCTAssertEqual(violations, [])
+    }
+
+    /// The source text of one trailing closure, from the marker's opening brace
+    /// to its matching close, so a hook's body can be inspected on its own.
+    private func closureBody(
+        after marker: String,
+        in text: String
+    ) throws -> String {
+        guard let start = text.range(of: marker) else {
+            throw StatusTextSourceError.missingMarker(marker)
+        }
+
+        var depth = 1
+        var index = start.upperBound
+        while index < text.endIndex, depth > 0 {
+            switch text[index] {
+            case "{": depth += 1
+            case "}": depth -= 1
+            default: break
+            }
+            if depth > 0 {
+                index = text.index(after: index)
+            }
+        }
+        guard depth == 0 else {
+            throw StatusTextSourceError.unbalancedClosure(marker)
+        }
+
+        return String(text[start.upperBound..<index])
     }
 
     private func settingsViewSource() throws -> String {
@@ -265,4 +377,6 @@ final class LocalAIStatusTextTests: XCTestCase {
 private enum StatusTextSourceError: Error {
     case missingSourceRoot(String)
     case cannotEnumerate(String)
+    case missingMarker(String)
+    case unbalancedClosure(String)
 }
