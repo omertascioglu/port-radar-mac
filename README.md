@@ -1,62 +1,84 @@
-<!-- Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution. -->
+<!-- Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork. -->
 
 <p align="center">
-  <img src="apps/mac/Support/AppIcon.png" alt="Port Radar" width="128" height="128">
+  <img src="apps/mac/Support/AppIcon.png" alt="Port Radar Offline" width="128" height="128">
 </p>
 
-<h1 align="center">Port Radar</h1>
+<h1 align="center">Port Radar Offline</h1>
 
 <p align="center">
-  The AI port manager for Mac. Every port your Mac is running — named, explained, stopped in one click.
+  A tunnel-free, offline-focused fork of Port Radar. Every port your Mac is running — named,
+  explained, stopped. Nothing leaves the machine.
 </p>
 
 ---
 
-Port Radar is a native macOS menu-bar app that lists every process listening on localhost,
-grouped by project. Ask an on-device Apple model or an optional verified local Ollama model
-what a process is and whether it's safe to stop. Share any local app as a live public URL with
-a one-click Cloudflare tunnel.
+Port Radar Offline is a native macOS menu-bar app that lists every process listening on
+localhost, grouped by project. Ask an on-device Apple model or a local Ollama model what a
+process is and whether it's safe to stop, then stop it. There is no sharing feature: the app
+publishes nothing and exposes no local port to the internet.
 
 - **Scan** — every listening TCP port, refreshed continuously, grouped by project
-- **Ask** — uses Apple's on-device model when available, with an optional local Ollama fallback
-  for unsupported or user-selected configurations
-- **Stop** — graceful SIGTERM with escalation, or force quit, always confirmed
-- **Share** — one-click Cloudflare quick tunnel, no account or CLI setup
+- **Ask** — Apple's on-device model when available, or a local Ollama model you already
+  installed; answers stream in and can be stopped mid-response
+- **Stop** — graceful SIGTERM with escalation to SIGKILL, or force quit, always confirmed
 
-macOS 14+. Apple's model requires macOS 26+, supported hardware, and Apple Intelligence;
-Ollama is an optional local fallback on supported Port Radar systems.
+macOS 14+. Apple's model requires macOS 26+, supported hardware, and Apple Intelligence.
+Ollama is optional and must be installed by you.
 
-## Local AI and privacy
+## Offline by design
 
-**Automatic** tries Apple's on-device `SystemLanguageModel` first. If it is unavailable, Port
-Radar can use the local Ollama model you selected; choosing Apple or Ollama in Settings forces
-that provider. See Apple's [Foundation Models documentation](https://developer.apple.com/documentation/foundationmodels/)
-for the Apple model's platform requirements.
+The chat footer says exactly what the app does: `Offline — data never leaves this Mac.`
 
-Ollama support is opt-in. Port Radar never installs Ollama, opens it without an explicit user
-action, or pulls a model. The picker shows only models already installed and supported by
-metadata that proves local storage. Remote, cloud, and ambiguous models are excluded—even when
-an Ollama service exposes them through localhost. For defense in depth, enable Ollama's
-`disable_ollama_cloud` / `OLLAMA_NO_CLOUD` local-only setting; see Ollama's
-[cloud](https://docs.ollama.com/cloud) and [privacy FAQ](https://docs.ollama.com/faq).
+**Apple on-device.** With **Automatic**, Ask tries Apple's on-device `SystemLanguageModel`
+first. Choosing **Apple Intelligence** or **Ollama** in Settings forces that provider. See
+Apple's [Foundation Models documentation](https://developer.apple.com/documentation/foundationmodels/)
+for the platform requirements.
 
-Before either provider sees process context, Port Radar replaces likely secrets with
-`[REDACTED]`. Port Radar keeps prompts and answers only in memory. An Ollama model loads on the
-first prompt; closing chat asks Ollama to unload that model immediately, on a best-effort basis.
-The local-only promise applies to **Ask**. **Share** is a separate, explicit action that publishes
-the selected localhost port through Cloudflare.
+**A private local Ollama service.** When Ask needs Ollama, Port Radar Offline starts its own
+`ollama serve` child process bound to `127.0.0.1:11435` with `OLLAMA_NO_CLOUD=1` and a
+scrubbed environment, and talks to it over a lease-bound transport that permits only
+`/api/version`, `/api/tags`, `/api/show`, and `/api/chat` on that address. It supplies no
+tools. Any redirect outside that boundary fails the request. The service is a child of the
+app, not the Ollama menu-bar app, so it is not shared with anything else on the Mac.
+
+**You install Ollama and its models.** The app never installs, updates, downloads, opens, or
+pulls anything. Settings only checks for local models when you press the button, and when it
+finds none it prints guidance instead of a link: install a model with Ollama outside Port
+Radar Offline, then check again. If Ollama is missing you get
+`Ollama is not installed. Install it separately, then try again.` — nothing is fetched for you.
+
+**Only local models.** The picker lists only models whose metadata proves local storage. Cloud,
+remote, and metadata-ambiguous models are rejected, and the selected model is validated again
+immediately before a chat starts.
+
+**Secrets are removed before the model sees anything.** The process snapshot is sanitized —
+likely tokens, passwords, authorization values, and URL credentials become `[REDACTED]` —
+before either provider receives it.
+
+**Nothing is written down.** Prompts, answers, and process context live in memory only. The app
+persists just the Ask toggle, the provider preference, and the selected model identifier.
+
+**Cleanup is ordered.** Closing chat cancels generation, asks Ollama to unload the model with
+`keep_alive: 0`, and releases the service lease; the private service stops when the last lease
+goes away. On quit the app closes the active conversation first, then shuts the private service
+down, then exits.
 
 ## Download
 
-Grab the latest DMG from [Releases](https://github.com/juansebsol/port-radar-mac/releases/latest),
-open it, and drag Port Radar to Applications. First-launch instructions are on the release page.
+Releases live at
+[Releases](https://github.com/omertascioglu/port-radar-mac/releases/latest); the published
+asset is
+[`Port-Radar-Offline.dmg`](https://github.com/omertascioglu/port-radar-mac/releases/latest/download/Port-Radar-Offline.dmg).
+Until this fork publishes one, build the disk image yourself with `make dmg`. Builds are not
+notarized yet, so first launch needs **System Settings → Privacy & Security → Open Anyway**.
 
 ## Build from source
 
 No third-party dependencies; you need the Swift toolchain that ships with Xcode.
 
 ```bash
-make run      # build, assemble Port Radar.app, launch
+make run      # build, assemble Port Radar Offline.app, launch
 make build    # compile only
 make bundle   # build + assemble without launching
 make dmg      # package a drag-to-Applications installer
@@ -84,10 +106,18 @@ apps/web/     Next.js landing page
 More detail in [`apps/mac/README.md`](apps/mac/README.md) and
 [`apps/web/README.md`](apps/web/README.md).
 
+## Upstream
+
+Port Radar Offline is a fork of [Port Radar](https://github.com/juansebsol/port-radar-mac) by
+Juan Sebastian Solano. The fork removes the upstream sharing feature, adds the private local
+Ollama service, and ships under its own name and bundle identifier so both apps can coexist.
+Upstream releases, listings, and support channels are not this fork's.
+
 ## License
 
 [Apache License 2.0](LICENSE) — free to use, modify, and distribute, including commercially.
-If you redistribute Port Radar or build on it, keep the copyright notice and ship a copy of
+If you redistribute this app or build on it, keep the copyright notices, ship a copy of
 [`NOTICE`](NOTICE) with it, and mark any files you changed.
 
-Copyright 2026 Juan Sebastian Solano.
+Copyright 2026 Juan Sebastian Solano. Port Radar Offline modifications copyright 2026
+Ömer Taşçıoğlu.

@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Outfit } from "next/font/google";
 import { site } from "@/lib/site";

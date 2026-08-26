@@ -1,27 +1,35 @@
-# Port Radar — Web
+<!-- Modification notice: Changed in 2026 for the Port Radar Offline fork. -->
 
-Premium marketing site for Product Hunt + macOS downloads. Lives in `apps/web`.
+# Port Radar Offline — Web
+
+Landing page for the macOS download. Lives in `apps/web`.
 
 ## Dev
 
 ```bash
 cd apps/web
+npm install
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Download / Product Hunt links
+## Download link
 
-Edit `src/lib/site.ts`, or set env vars:
+Edit `src/lib/site.ts`, or set the env var:
 
 ```bash
-NEXT_PUBLIC_DOWNLOAD_URL=https://github.com/juansebsol/port-radar-mac/releases/latest/download/Port-Radar.dmg
-NEXT_PUBLIC_PRODUCT_HUNT_URL=https://www.producthunt.com/posts/port-radar
+NEXT_PUBLIC_DOWNLOAD_URL=https://github.com/omertascioglu/port-radar-mac/releases/latest/download/Port-Radar-Offline.dmg
 ```
 
-The default download URL already points at the latest release asset, so it keeps working
-across releases as long as the DMG is named `Port-Radar.dmg` (see `make publish`).
+The default already points at the latest release asset, so it keeps working across releases as
+long as the DMG is named `Port-Radar-Offline.dmg` (see `make publish`).
+
+## Press routes
+
+`/press/gallery/01` … `/press/gallery/06` render 1270×760 stills of the app panel for
+screenshots. They reuse the live demo's components so the stills cannot drift from the product,
+and they are excluded from search indexing.
 
 ## Scripts
 
