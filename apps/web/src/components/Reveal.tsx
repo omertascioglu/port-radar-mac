@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";

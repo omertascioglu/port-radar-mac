@@ -122,6 +122,10 @@ function Hero() {
           <p className="text-[12px] font-medium text-faint">
             Free &amp; open source · on-device · no accounts, no uploads
           </p>
+          <p className="text-[12px] font-medium text-faint">
+            No release published yet — build from source with{" "}
+            <span className="font-mono text-[0.95em] text-ink/70">make dmg</span>.
+          </p>
         </div>
       </div>
 
@@ -517,7 +521,13 @@ function Download() {
           macOS 14+ · Apple Silicon & Intel · Apple&apos;s on-device model needs macOS
           26+, or bring your own local Ollama model
         </p>
-        <p className="mt-8 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
+        <p className="mt-4 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
+          <span className="font-medium text-ink">No release published yet:</span> the
+          download link resolves once this fork ships a DMG. Until then, clone the
+          repository and run{" "}
+          <span className="font-mono text-[0.95em] text-ink/70">make dmg</span>.
+        </p>
+        <p className="mt-4 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
           <span className="font-medium text-ink">First launch:</span> macOS blocks apps that
           aren&apos;t notarized yet. Open System Settings → Privacy &amp; Security and click{" "}
           <span className="font-medium text-ink">Open Anyway</span>. Once only.

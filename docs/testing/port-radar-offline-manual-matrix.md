@@ -131,6 +131,7 @@ declaration):
 - `apps/web/src/app/press/gallery/[slide]/page.tsx`
 - `apps/web/src/components/AppDemo.tsx`
 - `apps/web/src/components/PressPanel.tsx`
+- `apps/web/src/components/Reveal.tsx`
 - `apps/web/src/lib/site.ts`
 
 `NOTICE` is also modified: the upstream attribution is retained verbatim and the fork's

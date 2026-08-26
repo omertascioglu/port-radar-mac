@@ -141,7 +141,7 @@ final class OfflineProductBoundaryTests: XCTestCase {
 
     func testPublicCopyAdvertisesNoPublicSharingOrUpstreamProduct() throws {
         let repositoryRoot = try repositoryRootURL()
-        let caseFoldedForbidden = [
+        let caseFoldedForbidden: [String] = [
             ["cloud", "flare"].joined(),
             ["tunn", "el"].joined(),
             ["product", "hunt"].joined(),
@@ -152,8 +152,11 @@ final class OfflineProductBoundaryTests: XCTestCase {
             ["one-click ", "share"].joined(),
             ["one-button ", "share"].joined(),
             ["portradar", ".app"].joined(),
+            // Authoring-tool wrapper markup: shipped copy must never carry it.
+            ["</cont", "ent>"].joined(),
+            ["</inv", "oke>"].joined(),
         ]
-        let exactForbidden = [
+        let exactForbidden: [String] = [
             ["Port-Radar", ".dmg"].joined(),
             ["Port Radar", ".app"].joined(),
             ["com.sebsol.", "DevPort"].joined(),
@@ -208,6 +211,12 @@ final class OfflineProductBoundaryTests: XCTestCase {
         )
         XCTAssertTrue(notice.contains("Port Radar Offline modifications"))
         XCTAssertTrue(notice.contains("Ömer Taşçıoğlu"))
+        // NOTICE ships verbatim, so nothing may follow the fork attribution —
+        // a suffix check is what catches trailing junk a `contains` misses.
+        XCTAssertTrue(
+            notice.hasSuffix(Self.forkNoticeTail),
+            "NOTICE must end with the fork attribution and nothing else"
+        )
     }
 
     func testWebMarketingUsesTheOfflineIdentityAndForkURLs() throws {
@@ -277,6 +286,7 @@ final class OfflineProductBoundaryTests: XCTestCase {
                 "// Modification notice: \(fork)",
             "apps/web/src/components/AppDemo.tsx": "// Modification notice: \(fork)",
             "apps/web/src/components/PressPanel.tsx": "// Modification notice: \(fork)",
+            "apps/web/src/components/Reveal.tsx": "// Modification notice: \(fork)",
             "apps/web/src/lib/site.ts": "// Modification notice: \(fork)",
         ]
 
@@ -292,6 +302,45 @@ final class OfflineProductBoundaryTests: XCTestCase {
         }
     }
 
+    /// The hardcoded list above pins exact wording; this one is derived from the
+    /// upstream comparison, so a newly changed distributed file cannot slip
+    /// through by simply not being listed.
+    func testEveryChangedDistributedTextFileCarriesAModificationNotice() throws {
+        let repositoryRoot = try repositoryRootURL()
+        guard let changedPaths = Self.gitModifiedPaths(in: repositoryRoot) else {
+            throw XCTSkip("git or the origin/main ref is unavailable here")
+        }
+        XCTAssertFalse(
+            changedPaths.isEmpty,
+            "the upstream comparison should list modified files"
+        )
+
+        let violations = try changedPaths.compactMap { relativePath -> String? in
+            let name = (relativePath as NSString).lastPathComponent
+            let fileExtension = (relativePath as NSString).pathExtension
+            // NOTICE carries attribution as content, not as a file comment.
+            guard name != "NOTICE",
+                  Self.auditedExtensions.contains(fileExtension)
+                    || Self.auditedFileNames.contains(name) else {
+                return nil
+            }
+
+            let url = repositoryRoot.appendingPathComponent(relativePath)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            // Package.swift and Info.plist must open with a line their format
+            // mandates, so the notice is allowed to follow it.
+            let head = text
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .prefix(3)
+            guard !head.contains(where: { $0.contains("Modification notice:") }) else {
+                return nil
+            }
+            return "\(relativePath): missing modification notice"
+        }
+
+        XCTAssertEqual(violations, [])
+    }
+
     // MARK: - Audit helpers
 
     /// The upstream notice Apache 2.0 requires this fork to keep verbatim. It
@@ -305,6 +354,20 @@ final class OfflineProductBoundaryTests: XCTestCase {
 
         Licensed under the Apache License, Version 2.0. Redistributions and
         derivative works must include a readable copy of this notice.
+        """
+
+    /// The exact tail `NOTICE` must end with, trailing newline included.
+    private static let forkNoticeTail = """
+        Port Radar Offline modifications
+        Copyright 2026 Ömer Taşçıoğlu
+
+        Port Radar Offline is a modified version of Port Radar, maintained by
+        Ömer Taşçıoğlu (https://github.com/omertascioglu/port-radar-mac). The
+        modifications remove the upstream public sharing feature, add a private
+        local AI path, and change the product name and bundle identifier. Files
+        changed by this fork carry prominent modification notices as required by
+        Apache License 2.0 section 4(b).
+
         """
 
     /// Working artifacts and vendored trees, none of which ship or market the
@@ -347,6 +410,40 @@ final class OfflineProductBoundaryTests: XCTestCase {
             of: upstreamNotice,
             with: ""
         )
+    }
+
+    /// Files this fork changed relative to upstream, or `nil` when the
+    /// comparison cannot be made in this environment.
+    private static func gitModifiedPaths(in root: URL) -> [String]? {
+        let gitURL = URL(fileURLWithPath: "/usr/bin/git")
+        guard FileManager.default.isExecutableFile(atPath: gitURL.path) else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = gitURL
+        process.currentDirectoryURL = root
+        process.arguments = [
+            "diff", "--name-only", "--diff-filter=M", "origin/main",
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 
     private static func relativePath(of url: URL, in root: URL) -> String {
