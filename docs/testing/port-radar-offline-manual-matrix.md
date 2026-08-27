@@ -8,22 +8,44 @@ unavailable environments and unperformed UI or network checks remain `NOT RUN`.
 
 | Field | Recorded value |
 | --- | --- |
-| Date | 2026-08-26 |
-| Machine | Apple Silicon (`arm64`), sandboxed development environment |
+| Date | 2026-08-27 (user trial) |
+| Machine | Apple Silicon (`arm64`), the maintainer's own Mac |
 | macOS | 15.5 (24F74) |
 | Xcode | 16.4 (16F6) |
-| Ollama version | NOT RUN — not queried |
-| Selected local model | NOT RUN — no model queried or selected |
+| Ollama version | 0.19.0 |
+| Selected local model | qwen 3.5:9b-q4 (as reported by the user) |
 
-The macOS 26 SDK and the Apple Intelligence hardware/runtime path are unavailable in this
-environment. Ollama was not contacted, installed, started, stopped, or given a model, and the
-app's private local service was never launched. No app UI, network capture, or model request was
-run from the sandbox, so every item below is `NOT RUN`.
+The macOS 26 SDK and the Apple Intelligence hardware/runtime path remain unavailable, so the
+Apple-provider rows stay `NOT RUN`. On 2026-08-27 the user ran the manual trial from
+`outputs/PORT-RADAR-OFFLINE-TESTING.md` against the ad-hoc-signed bundle built at commit
+`c5faa25` and reported all nine trial checks passing. Only the rows the user's reported
+observations directly attest are marked `PASS` below; everything they did not explicitly
+verify remains `NOT RUN`.
+
+## User trial (2026-08-27) — reported results
+
+- [x] **PASS** — Port Radar Offline runs side by side with the upstream Port Radar app without
+  interfering with it.
+- [x] **PASS** — No sharing or public-link affordance anywhere in the panel, footer, row
+  menus, or Settings; the product surface is Scan, Ask, and Stop only.
+- [x] **PASS** — With the Ollama desktop app closed, **Check local models** listed the installed
+  local model without opening the Ollama app and without downloading anything.
+- [x] **PASS** — The cold first answer was slow but arrived without any error at the ~5-second
+  mark (the upstream five-second failure is gone).
+- [x] **PASS** — The reply streamed incrementally rather than appearing all at once.
+- [x] **PASS** — Stop preserved the partial text on screen and a new question could be sent
+  immediately afterward.
+- [x] **PASS** — Closing chat terminated the private `ollama` child process (observed
+  disappearing in Activity Monitor shortly after close).
+- [x] **PASS** — Reopening chat (including quickly after closing) started a fresh private
+  service and answered normally.
+- [x] **PASS** — Network observation during Ask showed no non-loopback connection from the app
+  or its managed Ollama child; traffic stayed on `127.0.0.1`.
 
 ## Product surface
 
-- [ ] **NOT RUN** — The menu bar panel offers Scan, Ask, and Stop only, with no sharing entry
-  point anywhere in the row menu, footer, or Settings. The app UI was not launched.
+- [x] **PASS** (user trial 2026-08-27) — The menu bar panel offers Scan, Ask, and Stop only,
+  with no sharing entry point anywhere in the row menu, footer, or Settings.
 - [ ] **NOT RUN** — The app identifies itself as Port Radar Offline in the menu bar title, the
   quit item, and the quit confirmation. The app UI was not launched.
 
@@ -44,11 +66,14 @@ run from the sandbox, so every item below is `NOT RUN`.
   `OLLAMA_NO_CLOUD=1`, and is a child of the app. No process was launched or inspected.
 - [ ] **NOT RUN** — A separately running Ollama app on the default port is left untouched. No
   service state was queried or changed.
-- [ ] **NOT RUN** — The service stops when the last lease is released, and does not linger after
-  chat closes. No lease was acquired.
-- [ ] **NOT RUN** — Proxy or network inspection shows requests only to `127.0.0.1:11435` and
-  only to `/api/version`, `/api/tags`, `/api/show`, and `/api/chat`. No network capture was
-  performed.
+- [x] **PASS** (user trial 2026-08-27) — The service stops when the last lease is released and
+  does not linger after chat closes: the `ollama` child disappeared from Activity Monitor
+  shortly after the chat window was closed, and reopening chat (including quickly) started a
+  fresh service.
+- [ ] **PARTIAL** (user trial 2026-08-27) — Network observation during Ask showed no
+  non-loopback connection from the app or its managed child; traffic stayed on `127.0.0.1`.
+  The per-path restriction (`/api/version`, `/api/tags`, `/api/show`, `/api/chat` only) was
+  not separately inspected and remains covered by the automated transport allowlist tests.
 - [ ] **NOT RUN** — A redirect off the private endpoint is refused with the local-only boundary
   error. No live redirect was produced.
 
@@ -70,8 +95,9 @@ run from the sandbox, so every item below is `NOT RUN`.
 
 ## Chat
 
-- [ ] **NOT RUN** — The reply streams in token by token and the Stop control ends it while
-  keeping the partial text. No live generation was started.
+- [x] **PASS** (user trial 2026-08-27) — The reply streams in incrementally and the Stop
+  control ends it while keeping the partial text; a new question could be sent immediately
+  afterward.
 - [ ] **NOT RUN** — The chat footer reads `Offline — data never leaves this Mac.` The app UI was
   not launched.
 - [ ] **NOT RUN** — Synthetic command secrets are absent from provider requests. This remains a
