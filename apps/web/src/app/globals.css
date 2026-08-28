@@ -1,3 +1,4 @@
+/* Modification notice: Changed in 2026 for the Port Radar Offline fork. */
 @import "tailwindcss";
 
 :root {
@@ -261,22 +262,6 @@ body {
   }
 }
 
-@keyframes tunnel-nudge {
-  0%,
-  100% {
-    transform: translateX(0);
-    opacity: 0.7;
-  }
-  50% {
-    transform: translateX(4px);
-    opacity: 1;
-  }
-}
-
-.tunnel-flow {
-  animation: tunnel-nudge 1.6s ease-in-out infinite;
-}
-
 @keyframes enter-down {
   from {
     opacity: 0;
@@ -315,7 +300,6 @@ body {
   .enter-d3,
   .nav-enter,
   .float-y,
-  .tunnel-flow,
   .demo-panel,
   .demo-fade,
   .demo-pulse,

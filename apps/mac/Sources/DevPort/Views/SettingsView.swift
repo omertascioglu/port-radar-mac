@@ -1,8 +1,15 @@
+// Modification notice: Changed in 2026 for the local AI and optional Ollama fallback contribution, and for the Port Radar Offline fork's private local Ollama service.
 import SwiftUI
 
 struct SettingsModal: View {
     @Bindable private var preferences = Preferences.shared
+    @State private var ollamaSettings = OllamaSettingsModel()
     let onDismiss: () -> Void
+
+    private var showsOllamaControls: Bool {
+        preferences.askAboutProcessEnabled
+            && preferences.localAIProviderPreference.usesOllamaControls
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +67,75 @@ struct SettingsModal: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                    }
+
+                    if preferences.askAboutProcessEnabled {
+                        Divider().padding(.leading, 12)
+
+                        settingsRow("AI provider") {
+                            Picker(
+                                "AI provider",
+                                selection: $preferences.localAIProviderPreference
+                            ) {
+                                ForEach(LocalAIProviderPreference.allCases) { provider in
+                                    Text(provider.displayName).tag(provider)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .fixedSize()
+                        }
+
+                        if preferences.localAIProviderPreference.usesOllamaControls {
+                            Divider().padding(.leading, 12)
+
+                            settingsRow("Ollama model") {
+                                switch ollamaSettings.state {
+                                case .ready(let models) where !models.isEmpty:
+                                    Picker(
+                                        "Ollama model",
+                                        selection: $preferences.ollamaModelID
+                                    ) {
+                                        Text("Choose…").tag("")
+                                        ForEach(models) { model in
+                                            Text(model.id).tag(model.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
+                                    .frame(maxWidth: 170)
+                                default:
+                                    // Before a check there is no list to pick
+                                    // from, so the row reports the model Ask
+                                    // would actually use.
+                                    Text(
+                                        ollamaSettings.state
+                                            .selectedModelSummary(
+                                                persistedModelID:
+                                                    preferences.ollamaModelID
+                                            )
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                }
+                            }
+
+                            Divider().padding(.leading, 12)
+
+                            ollamaStatus
+                        }
+
+                        Divider().padding(.leading, 12)
+
+                        Text("Offline — data never leaves this Mac.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
                     }
                 }
 
@@ -130,7 +206,18 @@ struct SettingsModal: View {
                 }
             }
             .padding(.horizontal, 16)
-            .onAppear { preferences.refreshLaunchAtLogin() }
+            .onAppear {
+                preferences.refreshLaunchAtLogin()
+            }
+            .onChange(of: preferences.askAboutProcessEnabled) {
+                cancelHiddenOllamaWork()
+            }
+            .onChange(of: preferences.localAIProviderPreference) {
+                cancelHiddenOllamaWork()
+            }
+            .onDisappear {
+                ollamaSettings.cancelRefresh()
+            }
 
             Divider()
                 .padding(.top, 16)
@@ -144,7 +231,7 @@ struct SettingsModal: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
-        .frame(width: 320)
+        .frame(width: 352)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor))
@@ -155,6 +242,52 @@ struct SettingsModal: View {
         )
         .shadow(color: .white.opacity(0.16), radius: 24, y: 0)
         .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
+    }
+
+    /// Readiness text plus the single control that checks for local models.
+    /// Nothing here links out: installing Ollama or a model happens outside
+    /// Port Radar Offline.
+    private var ollamaStatus: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                if ollamaSettings.state == .loading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Text(ollamaSettings.state.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 4)
+
+                Button(ollamaSettings.state.checkButtonTitle) {
+                    ollamaSettings.refresh(
+                        selectedModelID: preferences.ollamaModelID
+                    )
+                }
+                .controlSize(.small)
+                .disabled(ollamaSettings.state == .loading)
+            }
+
+            if let guidance = ollamaSettings.state.installationGuidance {
+                Text(guidance)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    /// The private local service only ever starts because someone pressed the
+    /// check button, so hiding the Ollama controls or closing Settings just
+    /// cancels the operation in flight and releases its lease.
+    private func cancelHiddenOllamaWork() {
+        guard !showsOllamaControls else { return }
+        ollamaSettings.cancelRefresh()
     }
 
     private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {

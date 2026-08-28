@@ -1,7 +1,8 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.
 import Foundation
 import os
 
-let scannerLog = Logger(subsystem: "com.sebsol.DevPort", category: "scanner")
+let scannerLog = Logger(subsystem: "com.omertascioglu.PortRadarOffline", category: "scanner")
 
 /// One listening TCP socket: a port bound by a process.
 /// IPv4/IPv6 duplicates for the same (port, pid) collapse via Hashable.

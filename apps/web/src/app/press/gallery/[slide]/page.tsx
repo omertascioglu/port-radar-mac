@@ -1,9 +1,10 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 import Image from "next/image";
 import type { ReactNode } from "react";
-import { PressPanel, type Still } from "@/components/PressPanel";
+import { PressPanel } from "@/components/PressPanel";
 
 /**
- * Launch gallery stills, rendered at Product Hunt's 1270x760.
+ * Launch gallery stills, rendered at 1270x760.
  * Screenshot each route, don't hand-draw mockups.
  */
 
@@ -24,7 +25,7 @@ export default async function GallerySlide({
     <Frame>
       {slide === "01" && <Hero />}
       {slide === "02" && <AskSlide />}
-      {slide === "03" && <TunnelSlide />}
+      {slide === "03" && <OfflineSlide />}
       {slide === "04" && <StopSlide />}
       {slide === "05" && <MenuSlide />}
       {slide === "06" && <CloseSlide />}
@@ -70,7 +71,7 @@ function Wordmark() {
     <div className="flex items-center gap-3">
       <Image src="/brand/app-icon.png" alt="" width={44} height={44} priority />
       <span className="font-display text-[24px] font-semibold tracking-[-0.035em] text-ink">
-        Port Radar
+        Port Radar Offline
       </span>
     </div>
   );
@@ -82,7 +83,7 @@ function Hero() {
       <div>
         <Wordmark />
         <h1 className="mt-8 font-display text-[52px] font-semibold leading-[1] tracking-[-0.045em] text-ink">
-          The AI port manager
+          The offline port manager
           <br />
           for Mac.
         </h1>
@@ -91,7 +92,7 @@ function Hero() {
           language, and stopped in one click.
         </p>
         <div className="mt-9 flex items-center gap-3">
-          {["Apple Intelligence", "On-device", "Free"].map((t) => (
+          {["On-device", "No network", "Free"].map((t) => (
             <span
               key={t}
               className="inline-flex items-center rounded-full border border-line bg-white/70 px-4 py-2 text-[14px] font-medium text-ink/80"
@@ -112,16 +113,16 @@ function AskSlide() {
   return (
     <div className="grid w-full grid-cols-[1fr_540px] items-center gap-10 px-16">
       <div>
-        <Eyebrow>Apple Intelligence</Eyebrow>
+        <Eyebrow>Ask</Eyebrow>
         <h2 className="mt-4 font-display text-[50px] font-semibold leading-[1] tracking-[-0.045em] text-ink">
           What&apos;s on 5173?
           <br />
           <span className="text-muted">Just ask.</span>
         </h2>
         <p className="mt-6 max-w-[29rem] text-[19px] font-light leading-relaxed text-muted">
-          Ask about any process. It reads the command, the project, the uptime —
-          then tells you what it is and whether it&apos;s safe to stop. On-device.
-          Nothing leaves your Mac.
+          Ask about any process. Apple&apos;s on-device model, or a local Ollama model
+          you installed, reads the command, the project, the uptime — then tells you
+          what it is and whether it&apos;s safe to stop. Nothing leaves your Mac.
         </p>
         <ul className="mt-8 space-y-3.5 text-[16px] text-ink/80">
           {[
@@ -143,29 +144,30 @@ function AskSlide() {
   );
 }
 
-function TunnelSlide() {
+function OfflineSlide() {
   return (
     <div className="grid w-full grid-cols-[540px_1fr] items-center gap-10 px-16">
       <div className="flex items-center justify-center">
-        <PressPanel still="tunnels" scale={1.28} />
+        <PressPanel still="stream" scale={1.28} />
       </div>
       <div>
-        <Eyebrow color="#f6821f">Cloudflare Tunnel</Eyebrow>
+        <Eyebrow>Offline</Eyebrow>
         <h2 className="mt-4 font-display text-[50px] font-semibold leading-[1] tracking-[-0.045em] text-ink">
-          Localhost, live.
+          The answer streams in.
           <br />
-          <span className="text-muted">One click.</span>
+          <span className="text-muted">Nothing streams out.</span>
         </h2>
         <p className="mt-6 max-w-[29rem] text-[19px] font-light leading-relaxed text-muted">
-          Need to show a teammate or client? Hit Share. Port Radar opens a
-          Cloudflare tunnel and hands you a public URL for your local app.
+          Replies arrive token by token and Stop ends one mid-response. Ollama runs
+          in a private service the app starts on 127.0.0.1 with cloud access off, and
+          the model unloads when you close the chat.
         </p>
         <div className="mt-8 flex max-w-[30rem] flex-wrap gap-2.5">
           {[
-            "One-button share",
-            "Auto-installs cloudflared",
-            "Copy public URL",
+            "Streamed replies",
             "Stop anytime",
+            "Private local service",
+            "In-memory only",
           ].map((t) => (
             <span
               key={t}
@@ -221,7 +223,7 @@ function MenuSlide() {
       <div>
         <Eyebrow>Every action, one menu</Eyebrow>
         <h2 className="mt-4 font-display text-[50px] font-semibold leading-[1] tracking-[-0.045em] text-ink">
-          Ask, share, open,
+          Ask, open,
           <br />
           <span className="text-muted">or shut it down.</span>
         </h2>
@@ -232,9 +234,9 @@ function MenuSlide() {
         <div className="mt-8 flex max-w-[30rem] flex-wrap gap-2.5">
           {[
             "Ask about process",
-            "Copy public URL",
             "Reveal in Finder",
             "Open in Cursor",
+            "Open in Terminal",
           ].map((t) => (
             <span
               key={t}
@@ -257,11 +259,11 @@ function CloseSlide() {
         Free for Mac.
       </h2>
       <p className="mt-5 text-[21px] font-light leading-relaxed text-muted">
-        Lives in your menu bar. Explains every port. Shares any of them with a
-        live link.
+        Lives in your menu bar. Explains every port. Stops the ones you don&apos;t
+        need — all without a network call.
       </p>
       <div className="mt-9 flex items-center gap-3">
-        {["Apple Intelligence", "On-device & private", "Native macOS"].map((t) => (
+        {["On-device & private", "Scan · Ask · Stop", "Native macOS"].map((t) => (
           <span
             key={t}
             className="inline-flex items-center rounded-full border border-line bg-white/70 px-4 py-2 text-[15px] font-medium text-ink/80"

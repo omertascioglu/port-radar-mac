@@ -1,6 +1,8 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { usePrefersReducedMotion } from "@/lib/reducedMotion";
 
 type RevealProps = {
   children: ReactNode;
@@ -12,22 +14,18 @@ type RevealProps = {
 /** Subtle fade + rise when scrolled into view. */
 export function Reveal({ children, className = "", delay = 0 }: RevealProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [shown, setShown] = useState(false);
+  const reduced = usePrefersReducedMotion();
+  const [seen, setSeen] = useState(false);
+  const shown = reduced || seen;
 
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    if (mq.matches) {
-      setShown(true);
-      return;
-    }
+    if (!el || reduced) return;
 
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) {
-          setShown(true);
+          setSeen(true);
           io.disconnect();
         }
       },
@@ -36,7 +34,7 @@ export function Reveal({ children, className = "", delay = 0 }: RevealProps) {
 
     io.observe(el);
     return () => io.disconnect();
-  }, []);
+  }, [reduced]);
 
   const style: CSSProperties | undefined = delay
     ? { transitionDelay: `${delay}ms` }

@@ -1,0 +1,364 @@
+import XCTest
+@testable import DevPort
+
+private struct AppleSessionSnapshot: Equatable, Sendable {
+    let responsePrompts: [String]
+    let activeResponses: Int
+    let maximumConcurrentResponses: Int
+    let cancellationCount: Int
+    let closeCount: Int
+}
+
+private actor ControlledAppleSession: AppleModelSession {
+    private var responsePrompts: [String] = []
+    private var activeResponses = 0
+    private var maximumConcurrentResponses = 0
+    private var cancellationCount = 0
+    private var closeCount = 0
+    private var pendingResponses:
+        [CheckedContinuation<String, any Error>] = []
+    private var responseCountWaiters:
+        [(Int, CheckedContinuation<Void, Never>)] = []
+    private var cancellationWaiters:
+        [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func respond(to prompt: String) async throws -> String {
+        responsePrompts.append(prompt)
+        activeResponses += 1
+        maximumConcurrentResponses = max(
+            maximumConcurrentResponses,
+            activeResponses
+        )
+        resumeResponseCountWaiters()
+        defer { activeResponses -= 1 }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pendingResponses.append(continuation)
+            }
+        } onCancel: {
+            Task { await self.recordCancellation() }
+        }
+    }
+
+    func close() async {
+        closeCount += 1
+    }
+
+    func waitUntilResponseCount(_ count: Int) async {
+        guard responsePrompts.count < count else { return }
+        await withCheckedContinuation { continuation in
+            responseCountWaiters.append((count, continuation))
+        }
+    }
+
+    func waitUntilCancellationCount(_ count: Int) async {
+        guard cancellationCount < count else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append((count, continuation))
+        }
+    }
+
+    func completeNextResponse(_ response: String) {
+        pendingResponses.removeFirst().resume(returning: response)
+    }
+
+    func snapshot() -> AppleSessionSnapshot {
+        .init(
+            responsePrompts: responsePrompts,
+            activeResponses: activeResponses,
+            maximumConcurrentResponses: maximumConcurrentResponses,
+            cancellationCount: cancellationCount,
+            closeCount: closeCount
+        )
+    }
+
+    private func recordCancellation() {
+        cancellationCount += 1
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for waiter in cancellationWaiters {
+            if cancellationCount >= waiter.0 {
+                waiter.1.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        cancellationWaiters = remaining
+    }
+
+    private func resumeResponseCountWaiters() {
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for waiter in responseCountWaiters {
+            if responsePrompts.count >= waiter.0 {
+                waiter.1.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        responseCountWaiters = remaining
+    }
+}
+
+private actor CompletionCounter {
+    private var value = 0
+
+    func increment() { value += 1 }
+    func count() -> Int { value }
+}
+
+/// Collects a streamed reply chunk by chunk, so a test can assert both the
+/// joined text and how many chunks carried it.
+private func chunks(
+    of stream: LocalAITextStream
+) async throws -> [String] {
+    var received: [String] = []
+    for try await chunk in stream {
+        try Task.checkCancellation()
+        received.append(chunk)
+    }
+    try Task.checkCancellation()
+    return received
+}
+
+private func respond(
+    _ conversation: AppleFoundationModelConversation,
+    to prompt: String
+) async throws -> String {
+    try await chunks(of: conversation.streamResponse(to: prompt))
+        .joined()
+}
+
+final class AppleProviderFallbackTests: XCTestCase {
+    func testAppleProviderAlwaysIdentifiesAsApple() {
+        XCTAssertEqual(AppleFoundationModelProvider().id, .apple)
+    }
+
+    func testLiveResolverComposesAppleAndOllamaProvidersWithoutDiscovery() {
+        let resolver = AIProviderResolver.live
+
+        XCTAssertEqual(resolver.apple.id, .apple)
+        XCTAssertEqual(resolver.ollama.id, .ollama)
+    }
+
+    func testAppleEmitsTheCompleteReplyAsExactlyOneChunk() async throws {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let response = Task {
+            try await chunks(of: conversation.streamResponse(to: "Question"))
+        }
+        await session.waitUntilResponseCount(1)
+
+        await session.completeNextResponse("One complete Apple reply")
+        let received = try await response.value
+
+        XCTAssertEqual(received, ["One complete Apple reply"])
+        await conversation.close()
+    }
+
+    func testConcurrentResponsesAreSerializedInCallOrder() async throws {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let first = Task {
+            try await respond(conversation, to: "First question")
+        }
+        await session.waitUntilResponseCount(1)
+
+        let secondStarted = expectation(description: "second caller started")
+        let second = Task {
+            secondStarted.fulfill()
+            return try await respond(conversation, to: "Second question")
+        }
+        await fulfillment(of: [secondStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+
+        var snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["First question"])
+        XCTAssertEqual(snapshot.maximumConcurrentResponses, 1)
+
+        await session.completeNextResponse("First answer")
+        let firstAnswer = try await first.value
+        XCTAssertEqual(firstAnswer, "First answer")
+        await session.waitUntilResponseCount(2)
+        snapshot = await session.snapshot()
+        XCTAssertEqual(
+            snapshot.responsePrompts,
+            ["First question", "Second question"]
+        )
+        XCTAssertEqual(snapshot.maximumConcurrentResponses, 1)
+
+        await session.completeNextResponse("Second answer")
+        let secondAnswer = try await second.value
+        XCTAssertEqual(secondAnswer, "Second answer")
+        await conversation.close()
+    }
+
+    func testCloseAwaitsUnwindBeforeReleaseAndRejectsLateResponse() async {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let response = Task {
+            try await respond(conversation, to: "Question")
+        }
+        await session.waitUntilResponseCount(1)
+
+        let completedCloses = CompletionCounter()
+        let firstClose = Task {
+            await conversation.close()
+            await completedCloses.increment()
+        }
+        let secondClose = Task {
+            await conversation.close()
+            await completedCloses.increment()
+        }
+        await session.waitUntilCancellationCount(1)
+
+        var snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.cancellationCount, 1)
+        XCTAssertEqual(snapshot.activeResponses, 1)
+        XCTAssertEqual(snapshot.closeCount, 0)
+        let completedBeforeUnwind = await completedCloses.count()
+        XCTAssertEqual(completedBeforeUnwind, 0)
+
+        await session.completeNextResponse("Too late")
+        await firstClose.value
+        await secondClose.value
+
+        do {
+            _ = try await response.value
+            XCTFail("Expected the late response to be rejected")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        await conversation.close()
+        snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.activeResponses, 0)
+        XCTAssertEqual(snapshot.closeCount, 1)
+        let completedAfterUnwind = await completedCloses.count()
+        XCTAssertEqual(completedAfterUnwind, 2)
+    }
+
+    func testCloseCancelsQueuedResponseWithoutStartingIt() async {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let active = Task {
+            try await respond(conversation, to: "Active")
+        }
+        await session.waitUntilResponseCount(1)
+
+        let queuedStarted = expectation(description: "queued caller started")
+        let queued = Task {
+            queuedStarted.fulfill()
+            return try await respond(conversation, to: "Queued")
+        }
+        await fulfillment(of: [queuedStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+
+        let close = Task { await conversation.close() }
+        await session.waitUntilCancellationCount(1)
+        await session.completeNextResponse("Late")
+        await close.value
+
+        for task in [active, queued] {
+            do {
+                _ = try await task.value
+                XCTFail("Expected close to cancel every response")
+            } catch is CancellationError {
+                // Expected.
+            } catch {
+                XCTFail("Expected CancellationError, got \(error)")
+            }
+        }
+
+        let snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["Active"])
+        XCTAssertEqual(snapshot.maximumConcurrentResponses, 1)
+        XCTAssertEqual(snapshot.closeCount, 1)
+    }
+
+    func testQueuedCancellationReturnsBeforeActiveResponseAndPreservesProgress() async throws {
+        let session = ControlledAppleSession()
+        let conversation = AppleFoundationModelConversation(session: session)
+        let active = Task {
+            try await respond(conversation, to: "Active")
+        }
+        await session.waitUntilResponseCount(1)
+
+        let queuedStarted = expectation(description: "queued caller started")
+        let queuedFinished = expectation(
+            description: "queued cancellation returned"
+        )
+        let canceled = Task {
+            queuedStarted.fulfill()
+            defer { queuedFinished.fulfill() }
+            return try await respond(conversation, to: "Canceled")
+        }
+        await fulfillment(of: [queuedStarted], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+        canceled.cancel()
+
+        await fulfillment(of: [queuedFinished], timeout: 1)
+        var snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["Active"])
+        XCTAssertEqual(snapshot.activeResponses, 1)
+
+        let survivor = Task {
+            try await respond(conversation, to: "Survivor")
+        }
+        await session.completeNextResponse("Active answer")
+        let activeAnswer = try await active.value
+        XCTAssertEqual(activeAnswer, "Active answer")
+
+        do {
+            _ = try await canceled.value
+            XCTFail("Expected queued cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        await session.waitUntilResponseCount(2)
+        snapshot = await session.snapshot()
+        XCTAssertEqual(snapshot.responsePrompts, ["Active", "Survivor"])
+        XCTAssertEqual(snapshot.maximumConcurrentResponses, 1)
+
+        await session.completeNextResponse("Survivor answer")
+        let survivorAnswer = try await survivor.value
+        XCTAssertEqual(survivorAnswer, "Survivor answer")
+        await conversation.close()
+    }
+
+    #if !canImport(FoundationModels)
+    func testAppleProviderIsUnavailableWithoutFramework() async {
+        let availability = await AppleFoundationModelProvider().availability(
+            modelID: nil
+        )
+
+        XCTAssertEqual(
+            availability,
+            .unavailable(.appleUnavailable(
+                "Apple Intelligence requires macOS 26 or later."
+            ))
+        )
+    }
+
+    func testAppleProviderCannotCreateConversationWithoutFramework() async {
+        do {
+            _ = try await AppleFoundationModelProvider().makeConversation(
+                context: SanitizedProcessContext(text: "port: 3000"),
+                modelID: nil
+            )
+            XCTFail("Expected Apple provider to be unavailable")
+        } catch {
+            XCTAssertEqual(
+                error as? LocalAIError,
+                .appleUnavailable(
+                    "Apple Intelligence requires macOS 26 or later."
+                )
+            )
+        }
+    }
+    #endif
+}

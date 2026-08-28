@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { AppDemo } from "@/components/AppDemo";
@@ -47,7 +48,7 @@ function Nav() {
           priority
         />
         <span className="font-display text-[26px] font-semibold leading-none tracking-[-0.035em] text-ink">
-          Port Radar
+          Port Radar Offline
         </span>
       </a>
       <div className="flex items-center gap-2">
@@ -55,7 +56,7 @@ function Nav() {
           href={site.githubUrl}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Port Radar on GitHub"
+          aria-label="Port Radar Offline on GitHub"
           className="inline-flex h-10 items-center gap-2 rounded-[11px] border border-line bg-white/60 px-3.5 text-[14px] font-semibold text-ink/75 transition-colors hover:border-ink/20 hover:bg-white hover:text-ink"
         >
           <GitHubIcon />
@@ -72,30 +73,6 @@ function Nav() {
   );
 }
 
-/**
- * Product Hunt's featured badge. Served as a remote SVG from their widget API,
- * so it stays a plain <img> rather than going through next/image.
- */
-function ProductHuntBadge() {
-  return (
-    <a
-      href={site.productHuntUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex transition-opacity hover:opacity-80"
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={site.productHuntBadge}
-        alt={`${site.name} — featured on Product Hunt`}
-        width={250}
-        height={54}
-        className="h-12 w-auto"
-      />
-    </a>
-  );
-}
-
 function GitHubIcon({ size = 17 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
@@ -109,17 +86,17 @@ function Hero() {
     <header id="top" className="relative mx-auto w-full max-w-[1120px] px-6 pb-10 pt-8 md:px-10 md:pt-12">
       <div className="mx-auto max-w-[42rem] text-center">
         <h1 className="enter font-display text-[clamp(2.15rem,5.4vw,3.65rem)] font-semibold leading-[1.02] tracking-[-0.045em] text-ink">
-          Ask AI what&apos;s
+          Ask a local model what&apos;s
           <br />
           running on your Mac.
         </h1>
         <p className="enter-d1 mx-auto mt-4 max-w-[36rem] text-[1.05rem] font-light leading-relaxed text-muted md:text-[1.12rem]">
           Mystery ports. Forgotten Vite servers. Random{" "}
           <span className="font-mono text-[0.95em] text-ink/70">node</span> eating CPU.
-          Port Radar finds everything listening — then{" "}
-          <span className="font-medium text-ink">Apple Intelligence</span> tells you
-          what it is, why it&apos;s there, and if it&apos;s safe to stop. On-device.
-          Nothing leaves your Mac.
+          Port Radar Offline finds everything listening — then{" "}
+          <span className="font-medium text-ink">an on-device model</span> tells you
+          what it is, why it&apos;s there, and if it&apos;s safe to stop. Three actions:
+          scan, ask, stop. Nothing leaves your Mac.
         </p>
 
         {/* Primary CTA — first viewport, no scroll required */}
@@ -143,7 +120,11 @@ function Hero() {
             </span>
           </a>
           <p className="text-[12px] font-medium text-faint">
-            Free &amp; open source · Apple Intelligence · on-device
+            Free &amp; open source · on-device · no accounts, no uploads
+          </p>
+          <p className="text-[12px] font-medium text-faint">
+            No release published yet — build from source with{" "}
+            <span className="font-mono text-[0.95em] text-ink/70">make dmg</span>.
           </p>
         </div>
       </div>
@@ -175,7 +156,7 @@ function Features() {
         <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
           <Reveal>
             <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-signal">
-              Apple Intelligence
+              Ask
             </p>
             <h2 className="mt-3 font-display text-[clamp(2rem,4vw,3.1rem)] font-semibold leading-[1.05] tracking-[-0.04em] text-ink">
               What&apos;s on 5173?
@@ -183,9 +164,12 @@ function Features() {
               <span className="text-muted">Just ask.</span>
             </h2>
             <p className="mt-5 max-w-[28rem] text-[1.05rem] font-light leading-relaxed text-muted">
-              Pick any process. Apple Intelligence reads the command, project, and
-              context — then tells you what it is, why it&apos;s running, and whether
-              you should stop it. On-device. Private. No cloud.
+              Pick any process. Apple&apos;s on-device model — or a local Ollama model
+              you already installed — reads the command, project, and context, then
+              tells you what it is, why it&apos;s running, and whether you should stop
+              it. Likely secrets are replaced with{" "}
+              <span className="font-mono text-[0.9em] text-ink/70">[REDACTED]</span>{" "}
+              first, and the conversation is never written to disk.
             </p>
             <ul className="mt-8 space-y-3 text-[14px] text-ink/80">
               {[
@@ -207,44 +191,50 @@ function Features() {
         </div>
       </div>
 
-      {/* Cloudflare share — same visual weight as AI */}
+      {/* Offline streaming — same visual weight as Ask */}
       <div className="relative overflow-hidden border-t border-line">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0"
           style={{
             background: `
-              radial-gradient(ellipse 65% 70% at 15% 45%, rgba(246,128,33,0.10), transparent 55%),
-              radial-gradient(ellipse 40% 50% at 90% 20%, rgba(13,148,136,0.06), transparent 50%)
+              radial-gradient(ellipse 65% 70% at 15% 45%, rgba(13,148,136,0.10), transparent 55%),
+              radial-gradient(ellipse 40% 50% at 90% 20%, rgba(12,14,20,0.05), transparent 50%)
             `,
           }}
         />
 
         <div className="relative mx-auto grid max-w-[1120px] items-center gap-12 px-6 py-20 md:grid-cols-2 md:gap-16 md:px-10 md:py-28">
           <Reveal>
-            <ShareTunnelMock />
+            <StreamingAskMock />
           </Reveal>
 
           <Reveal delay={120} className="order-first md:order-none">
-            <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-[#f6821f]">
-              Cloudflare Tunnel
+            <p className="font-display text-[13px] font-semibold uppercase tracking-[0.14em] text-signal">
+              Offline
             </p>
             <h2 className="mt-3 font-display text-[clamp(2rem,4vw,3.1rem)] font-semibold leading-[1.05] tracking-[-0.04em] text-ink">
-              Localhost → live link.
+              The answer streams in.
               <br />
-              <span className="text-muted">One click.</span>
+              <span className="text-muted">Nothing streams out.</span>
             </h2>
             <p className="mt-5 max-w-[30rem] text-[1.05rem] font-light leading-relaxed text-muted">
-              Shipping a preview to a teammate or client? Hit Share. Port Radar
-              spins up a Cloudflare tunnel and hands you a public URL for your
-              local app — in seconds. No CLI. No account dance. No ngrok ritual.
+              Ollama work runs against a private service the app starts itself on{" "}
+              <span className="font-mono text-[0.9em] text-ink/70">127.0.0.1:11435</span>{" "}
+              with{" "}
+              <span className="font-mono text-[0.9em] text-ink/70">
+                OLLAMA_NO_CLOUD=1
+              </span>
+              , limited to four local API paths. Only models whose metadata proves
+              local storage can be selected. Close the chat and the model unloads and
+              the service stops.
             </p>
             <div className="mt-8 flex flex-wrap gap-2.5">
               {[
-                "One-button share",
-                "Auto-installs cloudflared",
-                "Copy public URL",
-                "Stop anytime",
+                "Streamed replies with Stop",
+                "Private local service",
+                "No automatic downloads",
+                "In-memory only",
               ].map((t) => (
                 <span
                   key={t}
@@ -381,31 +371,23 @@ function AskChatMock() {
   );
 }
 
-function ShareTunnelMock() {
+/** Mid-stream Ask state: partial answer, the Stop control, and the local endpoint. */
+function StreamingAskMock() {
   return (
     <div className="relative mx-auto w-full max-w-[420px]">
       <div
         aria-hidden
-        className="absolute -inset-8 -z-10 rounded-[45%] bg-[#f6821f]/25 blur-3xl"
+        className="absolute -inset-8 -z-10 rounded-[45%] bg-signal/20 blur-3xl"
       />
 
-      {/* Bridge: localhost → live */}
+      {/* Where the model actually runs */}
       <div className="mb-4 flex items-center justify-center gap-3 text-[12px] font-medium">
         <span className="rounded-full border border-line bg-white/70 px-3 py-1 font-mono text-ink/70">
-          localhost:5173
+          127.0.0.1:11435
         </span>
-        <span className="tunnel-flow flex items-center text-[#f6821f]" aria-hidden>
-          <svg width="28" height="12" viewBox="0 0 28 12" fill="none">
-            <path d="M1 6h22" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M19 2l5 4-5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#f6821f] px-3 py-1 text-white shadow-[0_8px_20px_-6px_rgba(246,130,31,0.65)]">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-white" />
-          </span>
-          Live
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1 text-paper">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#30d158]" />
+          Local only
         </span>
       </div>
 
@@ -417,9 +399,9 @@ function ShareTunnelMock() {
       >
         <div className="flex items-start justify-between px-3.5 pb-2.5 pt-3.5">
           <div>
-            <p className="text-[14px] font-semibold text-white">Tunnels</p>
-            <p className="mt-0.5 text-[10px] text-white/40">
-              Cloudflare quick tunnels · public while active
+            <p className="text-[14px] font-semibold text-white">Ask about process</p>
+            <p className="mt-0.5 font-mono text-[10px] text-white/40">
+              node · localhost:5173 · pid 48244
             </p>
           </div>
           <span className="text-white/35">
@@ -430,33 +412,32 @@ function ShareTunnelMock() {
         </div>
         <div className="h-px bg-white/10" />
 
-        <div className="space-y-2.5 p-3">
-          <div className="rounded-[10px] bg-white/[0.06] p-3 ring-1 ring-white/8">
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-medium text-white">node</span>
-              <span className="font-mono text-[11px] text-white/40">:5173</span>
-              <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#30d158]/18 px-2 py-0.5 text-[10px] font-semibold text-[#30d158]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#30d158]" />
-                Live
-              </span>
-            </div>
-            <p className="mt-2 break-all font-mono text-[11px] leading-relaxed text-[#7dd3fc]">
-              https://checkout-web-preview.trycloudflare.com
-            </p>
-            <div className="mt-3 flex gap-2">
-              <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-white/10 text-[12px] font-semibold text-white/90 ring-1 ring-white/12">
-                Copy URL
-              </span>
-              <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-[#c62828]/25 text-[12px] font-semibold text-[#ff8a80] ring-1 ring-[#c62828]/30">
-                Stop
-              </span>
+        <div className="space-y-3 px-3 py-3">
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-[10px] bg-[#0a84ff]/22 px-2.5 py-2 text-[12.5px] leading-snug text-white/95">
+              Why has this been up 14 hours?
             </div>
           </div>
-
-          <div className="rounded-[10px] border border-dashed border-white/12 px-3 py-3 text-center text-[11px] text-white/35">
-            Share any port from the ⋯ menu — one click.
+          <div className="flex justify-start">
+            <div className="max-w-[92%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12.5px] leading-snug text-white/90">
+              It&apos;s a{" "}
+              <span className="font-mono text-[11px] text-teal-300">http.server</span>{" "}
+              you started this morning and never closed. Nothing depends on it, so
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="demo-spinner h-3.5 w-3.5 rounded-full border-2 border-white/20 border-t-white/80" />
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.09] px-2.5 py-1 text-[11.5px] font-medium text-white/85">
+              <span className="h-[7px] w-[7px] rounded-[1px] bg-white/85" />
+              Stop
+            </span>
           </div>
         </div>
+
+        <div className="h-px bg-white/10" />
+        <p className="px-3.5 py-2.5 text-[11px] text-white/40">
+          Offline — data never leaves this Mac.
+        </p>
       </div>
     </div>
   );
@@ -528,7 +509,7 @@ function Download() {
           Stop guessing what&apos;s listening.
         </h2>
         <p className="mt-4 max-w-md text-[1.05rem] font-light text-muted">
-          Download Port Radar. Ask Apple Intelligence. Figure out your Mac.
+          Download Port Radar Offline. Ask a local model. Figure out your Mac.
         </p>
         <a
           href={site.downloadUrl}
@@ -537,9 +518,16 @@ function Download() {
           <span>Download for macOS</span>
         </a>
         <p className="mt-4 text-[12px] font-light text-faint">
-          macOS 14+ · Apple Silicon & Intel · Apple Intelligence on macOS 26+
+          macOS 14+ · Apple Silicon & Intel · Apple&apos;s on-device model needs macOS
+          26+, or bring your own local Ollama model
         </p>
-        <p className="mt-8 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
+        <p className="mt-4 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
+          <span className="font-medium text-ink">No release published yet:</span> the
+          download link resolves once this fork ships a DMG. Until then, clone the
+          repository and run{" "}
+          <span className="font-mono text-[0.95em] text-ink/70">make dmg</span>.
+        </p>
+        <p className="mt-4 max-w-sm text-[12.5px] font-light leading-relaxed text-muted">
           <span className="font-medium text-ink">First launch:</span> macOS blocks apps that
           aren&apos;t notarized yet. Open System Settings → Privacy &amp; Security and click{" "}
           <span className="font-medium text-ink">Open Anyway</span>. Once only.
@@ -555,7 +543,6 @@ function Download() {
               <GitHubIcon size={18} />
               View source on GitHub
             </a>
-            <ProductHuntBadge />
           </div>
           <p className="mt-4 text-[12px] font-light text-faint">
             Open source under Apache 2.0
@@ -573,7 +560,7 @@ function Footer() {
         <div className="flex items-center gap-2">
           <Image src="/brand/app-icon.png" alt="" width={32} height={32} className="h-8 w-8" />
           <span className="font-display text-[18px] font-semibold leading-none tracking-tight text-ink">
-            Port Radar
+            Port Radar Offline
           </span>
         </div>
 
@@ -603,14 +590,6 @@ function Footer() {
               className="transition-colors hover:text-ink"
             >
               Releases
-            </a>
-            <a
-              href={site.productHuntUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="transition-colors hover:text-ink"
-            >
-              Product Hunt
             </a>
           </div>
           <p className="text-[11px] font-light text-faint sm:text-right">

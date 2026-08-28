@@ -1,7 +1,8 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork product identity.
 import Foundation
 import ServiceManagement
 
-/// Registers Port Radar as a Login Item via `SMAppService` (macOS 13+).
+/// Registers Port Radar Offline as a Login Item via `SMAppService` (macOS 13+).
 enum LaunchAtLogin {
     static var isEnabled: Bool {
         SMAppService.mainApp.status == .enabled

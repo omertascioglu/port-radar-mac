@@ -1,3 +1,4 @@
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
 "use client";
 
 import {
@@ -8,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { usePrefersReducedMotion } from "@/lib/reducedMotion";
 
 type Step =
   | "idle"
@@ -20,11 +22,8 @@ type Step =
   | "ask-type"
   | "move-ask-send"
   | "click-ask-send"
-  | "ask-thinking"
+  | "ask-stream"
   | "ask-reply"
-  | "move-share"
-  | "click-share"
-  | "share"
   | "move-stop"
   | "click-stop"
   | "move-stop-confirm"
@@ -36,12 +35,11 @@ type TargetId =
   | "ask"
   | "ask-item"
   | "ask-send"
-  | "share"
   | "stop"
   | "stop-confirm"
   | "rest";
 
-export type AskPhase = "compose" | "typing" | "sent" | "thinking" | "reply";
+export type AskPhase = "compose" | "typing" | "sent" | "streaming" | "reply";
 
 const ASK_QUESTION = "What is this — can I stop it?";
 
@@ -57,12 +55,8 @@ const SCRIPT: { step: Step; ms: number }[] = [
   { step: "ask-type", ms: 2800 },
   { step: "move-ask-send", ms: 700 },
   { step: "click-ask-send", ms: 280 },
-  { step: "ask-thinking", ms: 1100 },
+  { step: "ask-stream", ms: 3200 },
   { step: "ask-reply", ms: 4200 },
-  { step: "idle", ms: 1200 },
-  { step: "move-share", ms: 1200 },
-  { step: "click-share", ms: 280 },
-  { step: "share", ms: 4200 },
   { step: "idle", ms: 1200 },
   { step: "move-stop", ms: 1200 },
   { step: "click-stop", ms: 280 },
@@ -77,7 +71,6 @@ function targetForStep(step: Step): TargetId {
   if (step === "move-ask-item" || step === "click-ask-item") return "ask-item";
   if (step === "move-ask-send" || step === "click-ask-send") return "ask-send";
   if (step === "ask-compose" || step === "ask-type") return "rest";
-  if (step === "move-share" || step === "click-share") return "share";
   if (step === "move-stop" || step === "click-stop") return "stop";
   if (
     step === "move-stop-confirm" ||
@@ -106,7 +99,7 @@ function isAskFlow(step: Step): boolean {
     step === "ask-type" ||
     step === "move-ask-send" ||
     step === "click-ask-send" ||
-    step === "ask-thinking" ||
+    step === "ask-stream" ||
     step === "ask-reply"
   );
 }
@@ -115,7 +108,7 @@ function askPhaseFor(step: Step): AskPhase {
   if (step === "click-ask-item" || step === "ask-compose") return "compose";
   if (step === "ask-type" || step === "move-ask-send") return "typing";
   if (step === "click-ask-send") return "sent";
-  if (step === "ask-thinking") return "thinking";
+  if (step === "ask-stream") return "streaming";
   return "reply";
 }
 
@@ -127,10 +120,10 @@ function showEllipsisMenu(step: Step): boolean {
   );
 }
 
-/** Animated MenuBarExtra demo — Ask (⋯) → Tunnels → Stop. */
+/** Animated MenuBarExtra demo — Ask (⋯) → streamed local answer → Stop. */
 export function AppDemo() {
   const [step, setStep] = useState<Step>("idle");
-  const [reduced, setReduced] = useState(false);
+  const reduced = usePrefersReducedMotion();
   const [clickKey, setClickKey] = useState(0);
   const [cursor, setCursor] = useState({ x: 0, y: 0, ready: false });
   const [viteAlive, setViteAlive] = useState(true);
@@ -149,14 +142,6 @@ export function AppDemo() {
       y: tr.top - pr.top + tr.height * 0.3,
       ready: true,
     });
-  }, []);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
-    const onChange = () => setReduced(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
   }, []);
 
   useEffect(() => {
@@ -197,11 +182,9 @@ export function AppDemo() {
 
   const openOverlay = isAskFlow(step)
     ? "ask"
-    : step === "share" || step === "click-share"
-      ? "share"
-      : isStopFlow(step)
-        ? "stop"
-        : null;
+    : isStopFlow(step)
+      ? "stop"
+      : null;
 
   const menuOpen = showEllipsisMenu(step);
   const askPhase = askPhaseFor(step);
@@ -221,11 +204,9 @@ export function AppDemo() {
     step === "click-ask-item" ||
     isAskFlow(step)
       ? "ask"
-      : step === "move-share" || step === "click-share" || step === "share"
-        ? "share"
-        : step === "move-stop" || step === "click-stop"
-          ? "stop"
-          : null;
+      : step === "move-stop" || step === "click-stop"
+        ? "stop"
+        : null;
 
   const isClicking = step.startsWith("click-");
   const removing = step === "stop-done";
@@ -251,7 +232,6 @@ export function AppDemo() {
           showVite={showVite}
           viteFading={viteFading}
           removing={removing}
-          viteShared={step !== "stop-working" && !removing}
           highlight={highlight}
         />
 
@@ -262,7 +242,6 @@ export function AppDemo() {
 
         {menuOpen && <EllipsisMenu />}
         {openOverlay === "ask" && <AskOverlay phase={askPhase} />}
-        {openOverlay === "share" && <ShareOverlay />}
         {openOverlay === "stop" && <StopOverlay phase={stopPhase} />}
 
         {!reduced && cursor.ready && (
@@ -286,7 +265,6 @@ export function PanelBody({
   showVite,
   viteFading,
   removing,
-  viteShared,
   highlight,
 }: {
   dimmed: boolean;
@@ -294,8 +272,7 @@ export function PanelBody({
   showVite: boolean;
   viteFading: boolean;
   removing: boolean;
-  viteShared: boolean;
-  highlight: "ask" | "share" | "stop" | null;
+  highlight: "ask" | "stop" | null;
 }) {
   return (
     <div
@@ -304,7 +281,9 @@ export function PanelBody({
       }`}
     >
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-[13px] font-semibold tracking-[-0.01em]">Port Radar</span>
+        <span className="text-[13px] font-semibold tracking-[-0.01em]">
+          Port Radar Offline
+        </span>
         <span className="text-[11px] text-white/40">{listening} listening</span>
       </div>
       <div className="h-px bg-white/[0.1]" />
@@ -324,8 +303,7 @@ export function PanelBody({
               command="vite"
               port="5173"
               uptime="2h 14m"
-              shared={viteShared}
-              highlight={highlight === "ask" || highlight === "stop" ? highlight : null}
+              highlight={highlight}
               demoRow
             />
           </div>
@@ -350,17 +328,9 @@ export function PanelBody({
       </div>
 
       <div className="h-px bg-white/[0.1]" />
-      <FooterItem
-        icon="network"
-        label="Tunnels"
-        trailing={listening === 4 ? "1" : undefined}
-        demoTarget="share"
-        active={highlight === "share"}
-      />
-      <div className="h-px bg-white/[0.1]" />
       <FooterItem icon="gear" label="Settings" />
       <div className="h-px bg-white/[0.1]" />
-      <FooterItem icon="power" label="Quit Port Radar" />
+      <FooterItem icon="power" label="Quit Port Radar Offline" />
     </div>
   );
 }
@@ -372,19 +342,16 @@ function captionFor(step: Step): string {
     case "ask-menu":
     case "move-ask-item":
     case "click-ask-item":
-      return "Ask Apple Intelligence what a process is";
+      return "Ask a local model what a process is";
     case "ask-compose":
     case "ask-type":
     case "move-ask-send":
     case "click-ask-send":
       return "Type anything about the process";
-    case "ask-thinking":
+    case "ask-stream":
+      return "The answer streams in — Stop ends it anytime";
     case "ask-reply":
-      return "Get an on-device answer — private to your Mac";
-    case "move-share":
-    case "click-share":
-    case "share":
-      return "Share a live Cloudflare link in one click";
+      return "Offline: the question never left this Mac";
     case "move-stop":
     case "click-stop":
     case "move-stop-confirm":
@@ -441,9 +408,6 @@ function Cursor({
 export function EllipsisMenu() {
   const items = [
     { label: "Ask about process", target: "ask-item" as const, emphasis: true },
-    { label: "Copy public URL", target: undefined, emphasis: false },
-    { label: "Manage tunnel", target: undefined, emphasis: false },
-    { label: "Stop sharing", target: undefined, emphasis: false },
     { label: "Reveal in Finder", target: undefined, emphasis: false },
     { label: "Open in Cursor", target: undefined, emphasis: false },
     { label: "Open in Terminal", target: undefined, emphasis: false },
@@ -456,7 +420,7 @@ export function EllipsisMenu() {
     >
       {items.map((item, i) => (
         <div key={item.label}>
-          {(i === 1 || i === 4) && <div className="my-1 h-px bg-white/10" />}
+          {i === 1 && <div className="my-1 h-px bg-white/10" />}
           <div
             data-demo-target={item.target}
             className={`mx-1 rounded-[6px] px-2.5 py-[6px] text-[12.5px] transition-colors ${
@@ -473,35 +437,74 @@ export function EllipsisMenu() {
   );
 }
 
-export function AskOverlay({ phase }: { phase: AskPhase }) {
-  const [typed, setTyped] = useState("");
+/** The streamed answer, revealed a word at a time while `streaming` holds. */
+const ANSWER_WORDS = [
+  "Vite",
+  "dev",
+  "server",
+  "for",
+  "checkout-web",
+  "on",
+  "5173.",
+  "Safe",
+  "to",
+  "stop —",
+  "restart",
+  "with",
+  "npm run dev.",
+];
+
+/** Words already streamed when the streaming phase starts. */
+const STREAM_START = 6;
+
+/**
+ * Both animators take their opening value from `useState` and only advance from
+ * an interval callback, so a phase change remounts them through `key` instead of
+ * writing state synchronously inside an effect.
+ */
+function Typed({ animate }: { animate: boolean }) {
+  const [shown, setShown] = useState(animate ? "" : ASK_QUESTION);
 
   useEffect(() => {
-    if (phase === "compose") {
-      setTyped("");
-      return;
-    }
-    if (phase !== "typing") {
-      setTyped(ASK_QUESTION);
-      return;
-    }
-    setTyped("");
+    if (!animate) return;
     let i = 0;
     const id = window.setInterval(() => {
       i += 1;
-      setTyped(ASK_QUESTION.slice(0, i));
+      setShown(ASK_QUESTION.slice(0, i));
       if (i >= ASK_QUESTION.length) window.clearInterval(id);
     }, 58);
     return () => window.clearInterval(id);
-  }, [phase]);
+  }, [animate]);
 
+  return <>{shown}</>;
+}
+
+function StreamedAnswer({ streaming }: { streaming: boolean }) {
+  const [words, setWords] = useState(
+    streaming ? STREAM_START : ANSWER_WORDS.length,
+  );
+
+  useEffect(() => {
+    if (!streaming) return;
+    let i = STREAM_START;
+    const id = window.setInterval(() => {
+      i += 1;
+      setWords(Math.min(i, ANSWER_WORDS.length));
+      if (i >= ANSWER_WORDS.length) window.clearInterval(id);
+    }, 220);
+    return () => window.clearInterval(id);
+  }, [streaming]);
+
+  return <>{ANSWER_WORDS.slice(0, words).join(" ")}</>;
+}
+
+export function AskOverlay({ phase }: { phase: AskPhase }) {
   const showUser =
-    phase === "sent" || phase === "thinking" || phase === "reply";
-  const showThinking = phase === "thinking";
-  const showReply = phase === "reply";
-  const draft = phase === "compose" || phase === "typing" ? typed : "";
-  const showCaret = phase === "compose" || phase === "typing";
-  const canSend = draft.length > 0;
+    phase === "sent" || phase === "streaming" || phase === "reply";
+  const streaming = phase === "streaming";
+  const showAnswer = phase === "streaming" || phase === "reply";
+  const showDraft = phase === "compose" || phase === "typing";
+  const canSend = phase === "typing";
 
   return (
     <div className="demo-panel absolute inset-3 z-20 flex flex-col overflow-hidden rounded-[12px] border border-white/14 bg-[#1c1c1e] shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
@@ -531,38 +534,40 @@ export function AskOverlay({ phase }: { phase: AskPhase }) {
           </div>
         )}
 
-        {showThinking && (
-          <div className="flex items-center gap-2 text-[11px] text-white/45">
-            <span className="demo-spinner h-3 w-3 rounded-full border-2 border-white/20 border-t-white/80" />
-            Thinking…
+        {showAnswer && (
+          <div className="flex justify-start">
+            <div className="max-w-[94%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12px] leading-snug text-white/90">
+              <StreamedAnswer key={phase} streaming={streaming} />
+            </div>
           </div>
         )}
 
-        {showReply && (
-          <div className="demo-fade flex justify-start">
-            <div className="max-w-[94%] rounded-[10px] bg-white/[0.07] px-2.5 py-2 text-[12px] leading-snug text-white/90">
-              Vite for <span className="font-mono text-[11px] text-teal-300">checkout-web</span>.
-              Safe to stop — restart with{" "}
-              <span className="font-mono text-[11px]">npm run dev</span>.
-            </div>
+        {streaming && (
+          <div className="flex items-center gap-1.5">
+            <span className="demo-spinner h-3 w-3 rounded-full border-2 border-white/20 border-t-white/80" />
+            <span
+              aria-label="Stop response"
+              className="inline-flex items-center gap-1 rounded-full bg-white/[0.09] px-2 py-[3px] text-[11px] text-white/85"
+            >
+              <span className="h-[6px] w-[6px] rounded-[1px] bg-white/85" />
+              Stop
+            </span>
           </div>
         )}
       </div>
 
       <div className="h-px bg-white/10" />
-      <div className="flex items-end gap-2 px-3 py-2.5">
+      <div className="flex items-end gap-2 px-3 pt-2.5">
         <div className="relative min-h-[22px] flex-1 text-[12px] leading-snug">
-          {draft ? (
+          {phase === "typing" ? (
             <span className="text-white/90">
-              {draft}
-              {showCaret && (
-                <span className="demo-caret ml-px inline-block h-[13px] w-[1.5px] translate-y-[2px] bg-[#0a84ff]" />
-              )}
+              <Typed key={phase} animate />
+              <span className="demo-caret ml-px inline-block h-[13px] w-[1.5px] translate-y-[2px] bg-[#0a84ff]" />
             </span>
           ) : (
             <span className="text-white/30">
               Ask about this process…
-              {phase === "compose" && (
+              {showDraft && (
                 <span className="demo-caret ml-px inline-block h-[13px] w-[1.5px] translate-y-[2px] bg-[#0a84ff]" />
               )}
             </span>
@@ -580,44 +585,9 @@ export function AskOverlay({ phase }: { phase: AskPhase }) {
           </svg>
         </span>
       </div>
-    </div>
-  );
-}
-
-export function ShareOverlay() {
-  return (
-    <div className="demo-panel absolute inset-3 z-20 overflow-hidden rounded-[12px] border border-white/14 bg-[#1c1c1e] shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
-      <div className="flex items-start justify-between px-3 pb-2 pt-3">
-        <div>
-          <p className="text-[13px] font-semibold text-white">Tunnels</p>
-          <p className="mt-0.5 text-[10px] text-white/40">Cloudflare · public while active</p>
-        </div>
-        <span className="text-white/35">✕</span>
-      </div>
-      <div className="h-px bg-white/10" />
-      <div className="demo-fade p-3" style={{ animationDelay: "150ms" }}>
-        <div className="rounded-[10px] bg-white/[0.06] p-3 ring-1 ring-white/8">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-white">node</span>
-            <span className="font-mono text-[11px] text-white/40">:5173</span>
-            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#30d158]/18 px-2 py-0.5 text-[10px] font-semibold text-[#30d158]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#30d158]" />
-              Live
-            </span>
-          </div>
-          <p className="mt-2 break-all font-mono text-[11px] text-[#7dd3fc]">
-            https://checkout-web-preview.trycloudflare.com
-          </p>
-          <div className="mt-3 flex gap-2">
-            <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-white/10 text-[12px] font-semibold text-white/90">
-              Copy URL
-            </span>
-            <span className="inline-flex h-8 flex-1 items-center justify-center rounded-[8px] bg-[#c62828]/25 text-[12px] font-semibold text-[#ff8a80]">
-              Stop
-            </span>
-          </div>
-        </div>
-      </div>
+      <p className="px-3 pb-2.5 pt-1.5 text-[10px] text-white/40">
+        Offline — data never leaves this Mac.
+      </p>
     </div>
   );
 }
@@ -701,7 +671,6 @@ function ServerRow({
   port,
   uptime,
   orphan,
-  shared,
   highlight,
   demoRow,
 }: {
@@ -711,7 +680,6 @@ function ServerRow({
   port: string;
   uptime: string;
   orphan?: boolean;
-  shared?: boolean;
   highlight?: "ask" | "stop" | null;
   demoRow?: boolean;
 }) {
@@ -729,11 +697,6 @@ function ServerRow({
           }`}
         />
         <span className="text-[13px] font-medium text-white">{name}</span>
-        {shared && (
-          <span className="rounded-full bg-cyan-400/20 px-[5px] py-px text-[10px] font-medium text-cyan-300">
-            Shared
-          </span>
-        )}
         {orphan && (
           <span className="rounded-full bg-orange-400/20 px-[5px] py-px text-[10px] font-medium text-orange-300">
             Orphan
@@ -796,30 +759,17 @@ function IconWrap({
 function FooterItem({
   icon,
   label,
-  trailing,
-  demoTarget,
-  active,
 }: {
-  icon: "network" | "gear" | "power";
+  icon: "gear" | "power";
   label: string;
-  trailing?: string;
-  demoTarget?: TargetId;
-  active?: boolean;
 }) {
   return (
-    <div
-      data-demo-target={demoTarget}
-      className={`flex items-center gap-2 px-3 py-[9px] text-[13px] text-white/90 transition-colors duration-300 ${
-        active ? "bg-white/[0.08]" : ""
-      }`}
-    >
-      <span className={`text-white/45 ${active ? "text-white" : ""}`}>
-        {icon === "network" && <NetworkIcon />}
+    <div className="flex items-center gap-2 px-3 py-[9px] text-[13px] text-white/90">
+      <span className="text-white/45">
         {icon === "gear" && <GearIcon />}
         {icon === "power" && <PowerIcon />}
       </span>
-      <span className={active ? "font-medium text-white" : ""}>{label}</span>
-      {trailing && <span className="ml-auto text-[11px] text-white/35">{trailing}</span>}
+      <span>{label}</span>
     </div>
   );
 }
@@ -877,15 +827,6 @@ function ForceIcon() {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
       <circle cx="12" cy="12" r="9" />
       <path d="M13 6.5L9.5 13h3L11 17.5 14.5 11h-3L13 6.5z" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function NetworkIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-      <circle cx="12" cy="12" r="2.5" />
-      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
     </svg>
   );
 }

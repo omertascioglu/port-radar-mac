@@ -1,19 +1,13 @@
-/** Site config — update download URL when you ship a release DMG/zip. */
+// Modification notice: Changed in 2026 for the Port Radar Offline fork.
+/** Site config — update the download URL when a release DMG ships. */
 export const site = {
-  name: "Port Radar",
-  tagline: "Ask AI what’s running on your Mac.",
+  name: "Port Radar Offline",
+  tagline: "Ask a local model what’s running on your Mac.",
   description:
-    "Port Radar finds every localhost process in your menu bar — then Apple Intelligence explains what it is. One-click Cloudflare tunnels give you a live public URL for any local app. On-device. Private. Free and open source.",
+    "Port Radar Offline finds every localhost process in your menu bar — then an on-device Apple model or a local Ollama model explains what it is. No sharing, no accounts, no network calls. Free and open source.",
   // Resolves to the newest release's DMG — the asset name must stay stable.
   downloadUrl:
     process.env.NEXT_PUBLIC_DOWNLOAD_URL ??
-    "https://github.com/juansebsol/port-radar-mac/releases/latest/download/Port-Radar.dmg",
-  githubUrl: "https://github.com/juansebsol/port-radar-mac",
-  productHuntUrl:
-    process.env.NEXT_PUBLIC_PRODUCT_HUNT_URL ??
-    "https://www.producthunt.com/products/port-radar-for-macos",
-  // Official featured badge — post_id is fixed for the launch.
-  productHuntBadge:
-    "https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1228833&theme=neutral",
-  email: "hello@portradar.app",
+    "https://github.com/omertascioglu/port-radar-mac/releases/latest/download/Port-Radar-Offline.dmg",
+  githubUrl: "https://github.com/omertascioglu/port-radar-mac",
 } as const;
