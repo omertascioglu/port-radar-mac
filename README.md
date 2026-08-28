@@ -26,6 +26,31 @@ publishes nothing and exposes no local port to the internet.
 macOS 14+. Apple's model requires macOS 26+, supported hardware, and Apple Intelligence.
 Ollama is optional and must be installed by you.
 
+## What this fork changes
+
+Compared with [upstream Port Radar](https://github.com/juansebsol/port-radar-mac), this fork:
+
+- **Removes the sharing feature entirely.** No share menu, no link publishing, no third-party
+  edge service — the code paths were deleted, not hidden, and a repo-wide audit test fails the
+  suite if any of it reappears.
+- **Adds a managed private Ollama service.** The app starts its own `ollama serve` child on
+  `127.0.0.1:11435` with `OLLAMA_NO_CLOUD=1` and a scrubbed allowlist environment, and stops
+  it as soon as the last user of chat lets go.
+- **Hardens the local transport.** Requests can reach only the private service's exact address
+  on four endpoints (`/api/version`, `/api/tags`, `/api/show`, `/api/chat`); redirects,
+  proxies, cookies, credentials, and every other host or port are rejected.
+- **Streams answers, with Stop.** Replies render incrementally, Stop preserves the partial
+  text, and the upstream five-second chat failure is gone.
+- **Discovers models without touching your Ollama.** Settings checks installed local models
+  only when you press the button; nothing is opened, downloaded, or pulled — ever.
+- **Cleans up deterministically.** Closing chat unloads the model and stops the private
+  service; quitting the app closes conversations first, then shuts the service down.
+- **Uses its own product identity.** `Port Radar Offline`, its own bundle identifier, and its
+  own release artifact names, so it installs and runs alongside upstream Port Radar.
+
+286 automated tests pin these boundaries, including source and copy audits that fail if
+sharing code, non-local endpoints, or the upstream identity leak back in.
+
 ## Offline by design
 
 The chat footer says exactly what the app does: `Offline — data never leaves this Mac.`
