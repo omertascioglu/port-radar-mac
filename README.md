@@ -19,9 +19,13 @@ process is and whether it's safe to stop, then stop it. There is no sharing feat
 publishes nothing and exposes no local port to the internet.
 
 - **Scan** — every listening TCP port, refreshed continuously, grouped by project
-- **Ask** — Apple's on-device model when available, or a local Ollama model you already
-  installed; answers stream in and can be stopped mid-response
+- **Ask** — fully offline AI: Apple Intelligence's on-device model when available, or a local
+  Ollama model you already installed; answers stream in and can be stopped mid-response
 - **Stop** — graceful SIGTERM with escalation to SIGKILL, or force quit, always confirmed
+
+For Ollama, the app starts its own private `ollama serve` child bound to **`127.0.0.1:11435`**
+(loopback only — a dedicated port, so it never touches an Ollama you may already be running on
+the default `11434`) and stops it when chat closes. Nothing connects to the internet.
 
 macOS 14+. Apple's model requires macOS 26+, supported hardware, and Apple Intelligence.
 Ollama is optional and must be installed by you.
